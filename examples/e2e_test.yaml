@@ -1,0 +1,27 @@
+# End-to-end test of procdeck with fake workloads (see tools/).
+#   procdeck submit examples/e2e_test.yaml --dry-run
+#   procdeck submit examples/e2e_test.yaml
+name: e2e-test
+description: Fan-out RAM eaters limited by admission control, a flaky step with a retry, then a summary in a conda env.
+max_parallel: 3
+defaults:
+  cwd: D:/Code/procdeck
+  env: base
+  profile: background
+steps:
+  - name: eat
+    foreach: [a, b, c, d]
+    cmd: python tools/eat_ram.py --gb 0.4 --rate 0.2 --hold 15
+    mem: 0.5G
+
+  - name: flaky
+    cmd: python tools/eat_ram.py --gb 0.1 --hold 2 --fail-once-file "%TEMP%/procdeck_flaky_{index}.marker"
+    shell: true          # so %TEMP% is expanded by cmd.exe
+    retries: 1
+    mem: 0.2G
+
+  - name: summary
+    needs: [eat, flaky]
+    env: spikepost
+    mem: 0.2G
+    cmd: python tools/sleep_job.py --seconds 5 --label summary

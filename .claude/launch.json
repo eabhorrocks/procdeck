@@ -1,0 +1,15 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "procdeck",
+      "url": "http://127.0.0.1:8857"
+    },
+    {
+      "name": "mockup",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8840", "--bind", "127.0.0.1", "--directory", "D:/Code/procdeck/mockup"],
+      "port": 8840, "autoPort": false
+    }
+  ]
+}

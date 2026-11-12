@@ -1,0 +1,15 @@
+name: procdeck
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+      - psutil
+      - fastapi
+      - uvicorn
+      - pyyaml
+      - winotify
+      - pytest
+      - httpx
+      - -e .

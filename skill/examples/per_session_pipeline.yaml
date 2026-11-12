@@ -1,0 +1,32 @@
+# Example: per-session processing fanned out over sessions, a pairwise QC step, then a summary and MATLAB figures.
+name: m01-october
+description: Sort, QC and summarise M01's October sessions
+max_parallel: 2
+defaults:
+  env: spikepost
+  profile: background
+  mem: 6G
+  retries: 1
+  timeout: 3h
+steps:
+  - name: sort
+    foreach: [M01_2026-10-01, M01_2026-10-02, M01_2026-10-07]
+    cmd: python sort.py --session {item}
+
+  - name: qc
+    foreach: [M01_2026-10-01, M01_2026-10-02, M01_2026-10-07]
+    needs: ["sort[{item}]"]
+    cmd: python qc.py --session {item}
+    mem: 2G
+
+  - name: summary
+    needs: [qc]
+    cmd: python summarise.py --mouse M01
+    mem: 3G
+
+  - name: figs
+    needs: [summary]
+    env: null
+    profile: heavy
+    mem: 4G
+    cmd: matlab -batch "make_figs('M01')"

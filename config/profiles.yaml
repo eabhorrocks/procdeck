@@ -1,0 +1,33 @@
+# Resource profiles used by pipeline steps (`profile:`) and by rules.
+#
+#   cores:      which logical CPUs the step may use: "all", "0-5", "0,2,4", ...  (this machine: 0-11)
+#               Logical CPUs 2k and 2k+1 are the two hyperthreads of physical core k.
+#   threads:    sets OMP/MKL/OPENBLAS/NUMEXPR/NUMBA thread counts, LOKY_MAX_CPU_COUNT, and PROCDECK_WORKERS
+#               (read PROCDECK_WORKERS in your script for n_jobs / parpool size). Defaults to the number of cores.
+#   priority:   idle | below_normal | normal | above_normal | high
+#               Careful with idle: while other jobs keep every core busy, an idle-priority step gets almost no CPU
+#               and can sit for many minutes without even finishing Python start-up.
+#   cpu_weight: 1-9, relative CPU share against other weighted steps when the CPU is contended
+#   cpu_cap:    hard ceiling in % of the whole machine (use instead of cpu_weight)
+#   mem_cap_gb: hard memory limit; the step fails with MemoryError when it is reached (use with care)
+
+default:
+  cores: all
+  priority: normal
+
+heavy:
+  cores: all
+  threads: 10
+  priority: normal
+  cpu_weight: 8
+
+background:
+  cores: 6-11             # physical cores 3-5; leaves 0-5 free for the desktop and heavy jobs
+  threads: 6
+  priority: below_normal
+  cpu_weight: 2
+
+tiny:
+  cores: 10-11
+  threads: 2
+  priority: below_normal

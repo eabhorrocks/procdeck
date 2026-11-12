@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>procdeck</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="dot" id="liveDot"></span>procdeck</div>
+  <nav id="nav">
+    <button data-tab="runs" class="on">Runs</button>
+    <button data-tab="procs">Processes</button>
+    <button data-tab="system">System</button>
+    <button data-tab="history">History</button>
+    <button data-tab="config">Rules &amp; profiles</button>
+  </nav>
+  <div class="hstats">
+    <div class="hstat"><span class="lbl">CPU</span><svg id="hcpuSpark" class="spark" width="80" height="22"></svg><span class="num" id="hcpu">--</span></div>
+    <div class="hstat"><span class="lbl">RAM</span><div class="bar" id="hramBar"><i style="width:0"></i></div><span class="num" id="hram">--</span></div>
+    <div class="hstat"><span class="lbl">Commit</span><span class="num" id="hcommit">--</span></div>
+    <div class="hstat muted" style="font-size:11px" id="hdaemon">connecting…</div>
+  </div>
+</header>
+
+<div id="banners"></div>
+
+<main>
+<section class="tab on" id="tab-runs">
+  <div class="strip" id="kpis"></div>
+  <div class="runs-layout">
+    <div class="card"><div class="hd"><h2>Runs</h2><span class="muted" style="font-size:12px" id="runsCount"></span></div>
+      <div class="runlist" id="runList"></div></div>
+    <div id="runDetail"></div>
+  </div>
+</section>
+
+<section class="tab" id="tab-procs">
+  <div class="card">
+    <div class="hd">
+      <h2>Processes</h2><span class="muted" style="font-size:12px">grouped by job tree · click a row to steer</span>
+      <div style="margin-left:auto" class="toolbar">
+        <input type="search" id="procFilter" placeholder="filter…" style="width:160px">
+        <div class="seg-toggle" id="procView"><button data-v="all" class="on">All</button><button data-v="jobs">Jobs</button><button data-v="flagged">Flagged</button></div>
+        <select id="procSort"><option value="rss">Sort: RAM</option><option value="cpu">Sort: CPU</option><option value="label">Sort: name</option></select>
+      </div>
+    </div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Job / process</th><th class="r">PID</th><th class="r">CPU</th><th>last 60 s</th><th class="r">RAM</th><th class="r">Procs</th><th>Priority</th><th>Cores</th><th>Flags</th></tr></thead>
+        <tbody id="procBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="tab" id="tab-system">
+  <div class="grid2">
+    <div class="card"><div class="hd"><h2>CPU per logical core</h2><span class="muted" style="font-size:12px" id="cpuInfo"></span></div>
+      <div class="bd"><div class="coregrid" id="coregrid"></div><div class="corelbl" id="corelbl"></div></div></div>
+    <div class="card"><div class="hd"><h2>Memory</h2><span class="muted num" style="font-size:12px" id="memTotal"></span></div>
+      <div class="bd">
+        <div class="membar" id="membar"></div>
+        <div class="legend" id="memLegend"></div>
+        <div class="hbars" style="margin-top:14px" id="topram"></div>
+      </div></div>
+  </div>
+  <div class="card"><div class="hd"><h2>Last 10 minutes</h2><span class="legend" style="margin:0"><span><i style="background:var(--accent)"></i>CPU %</span><span><i style="background:var(--ram)"></i>RAM %</span><span><i style="background:var(--warn);height:2px"></i>RAM warning level</span></span></div>
+    <div class="bd"><svg id="sysChart" class="chart" viewBox="0 0 600 170" preserveAspectRatio="none"></svg></div></div>
+</section>
+
+<section class="tab" id="tab-history">
+  <div class="card"><div class="hd"><h2>History</h2>
+    <div class="seg-toggle" id="histRange" style="margin-left:auto"><button data-m="60" class="on">1 h</button><button data-m="360">6 h</button><button data-m="1440">24 h</button><button data-m="10080">7 d</button></div></div>
+    <div class="bd"><svg id="histChart" class="chart" viewBox="0 0 600 170" preserveAspectRatio="none"></svg>
+      <div class="legend"><span><i style="background:var(--accent)"></i>CPU %</span><span><i style="background:var(--ram)"></i>RAM %</span><span id="histSpan"></span></div></div></div>
+  <div class="grid2">
+    <div class="card"><div class="hd"><h2>Biggest jobs in this window</h2></div><div class="tablewrap"><table><thead><tr><th>Job</th><th class="r">Peak RAM</th><th class="r">Mean CPU</th><th>Seen</th></tr></thead><tbody id="histJobs"></tbody></table></div></div>
+    <div class="card"><div class="hd"><h2>Per-script stats (finished procdeck steps)</h2></div><div class="tablewrap"><table><thead><tr><th>Script</th><th class="r">Runs</th><th class="r">Median time</th><th class="r">Peak RAM</th><th class="r">CPU-h</th></tr></thead><tbody id="histScripts"></tbody></table></div>
+      <div class="bd note">These feed the default <code>mem:</code> estimates and the projected bars on the Runs timeline.</div></div>
+  </div>
+</section>
+
+<section class="tab" id="tab-config">
+  <div class="grid2">
+    <div class="card"><div class="hd"><h2>Profiles</h2><button class="primary sm" data-save="profiles" style="margin-left:auto">Save</button></div>
+      <div class="bd"><textarea id="cfg-profiles" spellcheck="false"></textarea><div class="err" id="err-profiles"></div></div></div>
+    <div class="card"><div class="hd"><h2>Rules</h2><span class="muted" style="font-size:12px">applied when a matching process starts</span><button class="primary sm" data-save="rules" style="margin-left:auto">Save</button></div>
+      <div class="bd"><textarea id="cfg-rules" spellcheck="false"></textarea><div class="err" id="err-rules"></div>
+      <div class="note" id="rulesLog"></div></div></div>
+  </div>
+  <div class="card"><div class="hd"><h2>Settings</h2><span class="muted" style="font-size:12px">alerts, admission, flags</span><button class="primary sm" data-save="settings" style="margin-left:auto">Save</button></div>
+    <div class="bd"><textarea id="cfg-settings" spellcheck="false"></textarea><div class="err" id="err-settings"></div></div></div>
+</section>
+</main>
+
+<aside class="drawer" id="drawer">
+  <div class="hd">
+    <div style="flex:1;min-width:0"><h3 id="dTitle">-</h3><div class="lbl-sub" id="dExe" style="white-space:normal;word-break:break-all"></div></div>
+    <button id="dClose">✕</button>
+  </div>
+  <div class="bd">
+    <div class="kv" id="dKv"></div>
+    <div class="ctl"><label>Quick profile</label><div class="btnrow" id="dProfiles"></div></div>
+    <div class="ctl"><label>Priority</label>
+      <select id="dPri"><option value="idle">Idle</option><option value="below_normal">Below normal</option><option value="normal">Normal</option><option value="above_normal">Above normal</option><option value="high">High</option></select>
+    </div>
+    <div class="ctl"><label>Cores (whole tree)</label>
+      <div class="cores" id="dCores"></div>
+      <div class="note">Pinning doesn't change how many workers the job spawned; they share the selected cores.</div>
+    </div>
+    <div class="ctl"><label>CPU share</label>
+      <div class="seg-toggle" id="dMode"><button data-m="none" class="on">Unlimited</button><button data-m="weight">Weight</button><button data-m="cap">Hard cap</button></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px"><input type="range" id="dShare" min="1" max="9" value="5"><span class="num" id="dShareV" style="width:60px;text-align:right">-</span></div>
+      <div class="note" id="dShareNote"></div>
+    </div>
+    <div class="ctl"><label>Memory cap</label>
+      <div style="display:flex;gap:8px;align-items:center"><input type="number" id="dMem" min="0" step="0.5" style="width:80px"> GB <span class="note" style="margin:0">(empty = unchanged, 0 = remove)</span></div>
+      <div class="note">At the cap the job's allocations fail (MemoryError), so it usually crashes. Use as a safety net.</div>
+    </div>
+    <div class="btnrow" style="margin-top:18px">
+      <button class="primary" id="dApply">Apply to tree</button>
+      <button id="dSuspend">Suspend</button>
+      <button id="dResume">Resume</button>
+      <button class="danger" id="dKill">Kill tree</button>
+    </div>
+    <div class="result" id="dResult" style="display:none"></div>
+  </div>
+</aside>
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

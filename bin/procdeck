@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Git Bash / MSYS shim for the procdeck CLI.
+PY="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$LOCALAPPDATA")/miniconda3/envs/procdeck/python.exe"
+exec "$PY" -m procdeck "$@"

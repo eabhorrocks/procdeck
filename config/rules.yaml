@@ -1,0 +1,20 @@
+# Rules applied automatically when a matching process starts (and once to existing processes when the daemon starts).
+# They never touch procdeck-managed steps (those use their profile).
+#
+# match (all given fields must match; globs are case-insensitive):
+#   exe: python.exe          program name
+#   cmd: "*loky*"            glob on the full command line
+#   cwd: "D:/Code/*"         glob on the working directory (forward or back slashes)
+# set (any of):
+#   profile: background      apply a profile from profiles.yaml (cores, priority, cpu_weight/cap)
+#   priority: below_normal
+#   cores: "6-11"
+#   cpu_weight: 3 | cpu_cap: 40
+#
+# Examples (uncomment to enable):
+# - match: {exe: matlab.exe}
+#   set: {priority: below_normal}
+# - match: {exe: python.exe, cwd: "D:/Code/*", cmd: "*loky*"}
+#   set: {profile: background}
+
+[]

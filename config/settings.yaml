@@ -1,0 +1,34 @@
+# procdeck daemon settings. Edit here or in the dashboard (Rules & profiles tab); the daemon reloads on save.
+
+port: 8857
+sample_interval: 1.0        # seconds between process samples
+history_interval: 5         # seconds between rows written to the history database
+history_days: 30            # older history rows are deleted
+
+alerts:
+  ram_warn: 85              # % of physical RAM in use
+  ram_critical: 93
+  commit_warn: 90           # % of commit limit (RAM + pagefile)
+  eta_warn_minutes: 5       # warn early if RAM is predicted to be full within this many minutes
+  toast: true               # Windows notification on new warnings, critical alerts and finished runs
+  on_critical:
+    - pause_admission       # stop starting queued steps until RAM recovers
+    # - suspend_lowest      # also suspend the lowest-priority running procdeck step (stops growth, frees nothing)
+
+flags:
+  idle_cpu_below: 1.0       # % of the whole machine
+  idle_minutes: 30
+  idle_ram_gb: 1.0
+  # Only these programs get the "orphaned" flag (lots of Windows processes legitimately outlive their parent).
+  orphan_watch: [python.exe, pythonw.exe, matlab.exe, julia.exe, r.exe, rscript.exe, rterm.exe, node.exe, java.exe]
+
+admission:
+  headroom_gb: 1.5          # RAM kept free for the desktop when deciding whether a step can start
+  default_mem_gb: 1.0       # estimate for steps with no `mem:` and no history
+  cpu_threads_budget: 12    # sum of `threads` across running steps (one step may always run)
+  max_running: null         # optional hard cap on concurrently running steps
+  idle_cpu_below: 20        # `when: idle` steps start once machine CPU has been below this %...
+  idle_minutes: 5           # ...for this long
+
+# Processes that are grouped by process tree ("jobs") instead of by program name.
+compute_exes: [python.exe, pythonw.exe, matlab.exe, julia.exe, r.exe, rscript.exe, rterm.exe, java.exe]

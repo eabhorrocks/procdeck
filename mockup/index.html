@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>procdeck (mockup)</title>
+<style>
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --panel2:#f9fafb; --ink:#1b1f24; --muted:#667085; --line:#e4e7ec;
+  --accent:#3563e9; --accent-soft:#e8eefc;
+  --ok:#1f9d55; --ok-soft:#e5f5ec; --warn:#c77d00; --warn-soft:#fff4dc; --bad:#d23f3f; --bad-soft:#fde8e8;
+  --idle:#8a94a6; --run:#3563e9; --queued:#b4bccb;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#0d1014; --panel:#151a21; --panel2:#1a2029; --ink:#e6edf3; --muted:#8b949e; --line:#262d37;
+    --accent:#6b93ff; --accent-soft:#1c2740;
+    --ok:#3fb970; --ok-soft:#14291d; --warn:#e3a33a; --warn-soft:#2e2412; --bad:#f06464; --bad-soft:#331a1a;
+    --idle:#7d8796; --run:#6b93ff; --queued:#4a5262;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.muted{color:var(--muted)}
+button{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:5px 10px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.danger{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 40%,var(--line))}
+select,input[type=number]{font:inherit;color:inherit;background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+
+/* header */
+header{position:sticky;top:0;z-index:5;background:var(--panel);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:20px;padding:8px 16px;flex-wrap:wrap}
+.brand{font-weight:700;letter-spacing:.2px;display:flex;align-items:center;gap:8px}
+.brand .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px var(--ok-soft)}
+nav{display:flex;gap:2px}
+nav button{border:none;background:none;padding:6px 12px;border-radius:6px;color:var(--muted)}
+nav button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.hstats{margin-left:auto;display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.hstat{display:flex;align-items:center;gap:8px}
+.hstat .lbl{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.bar{width:110px;height:8px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.bar>i{display:block;height:100%;background:var(--accent)}
+.bar.warn>i{background:var(--warn)}
+.bar.bad>i{background:var(--bad)}
+
+/* alert */
+.alert{margin:12px 16px 0;padding:10px 14px;border-radius:8px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 45%,transparent);display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.alert b{color:var(--warn)}
+.alert .acts{margin-left:auto;display:flex;gap:8px}
+
+main{padding:12px 16px 40px}
+.tab{display:none}.tab.on{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:12px}
+.card>.hd{display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.card>.bd{padding:12px 14px}
+.hd h2{font-size:14px;margin:0}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+.pill.run{color:var(--run);background:var(--accent-soft);border-color:transparent}
+.pill.ok{color:var(--ok);background:var(--ok-soft);border-color:transparent}
+.pill.warn{color:var(--warn);background:var(--warn-soft);border-color:transparent}
+.pill.bad{color:var(--bad);background:var(--bad-soft);border-color:transparent}
+.pill.q{color:var(--muted)}
+
+/* admission strip */
+.strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
+.kpi .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.kpi .v{font-size:20px;font-weight:600;margin-top:2px}
+.kpi .s{font-size:12px;color:var(--muted)}
+
+/* gantt */
+.gantt{display:grid;grid-template-columns:230px 1fr;row-gap:6px;align-items:center}
+.gantt .axis{grid-column:2;position:relative;height:18px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.gantt .axis span{position:absolute;transform:translateX(-50%)}
+.gantt .lab{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:10px}
+.gantt .lab .sub{color:var(--muted);font-size:11px}
+.track{position:relative;height:22px;background:repeating-linear-gradient(90deg,transparent 0 calc(16.66% - 1px),var(--line) calc(16.66% - 1px) 16.66%)}
+.seg{position:absolute;top:3px;height:16px;border-radius:4px;font-size:10px;color:#fff;padding:0 6px;line-height:16px;white-space:nowrap;overflow:hidden}
+.seg.done{background:var(--ok)}
+.seg.run{background:var(--run)}
+.seg.fail{background:var(--bad)}
+.seg.proj{background:repeating-linear-gradient(45deg,var(--queued) 0 6px,transparent 6px 10px);color:var(--muted);border:1px dashed var(--queued)}
+.now{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--bad);opacity:.7}
+.legend{display:flex;gap:14px;font-size:11px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+.legend i{display:inline-block;width:12px;height:8px;border-radius:2px;margin-right:5px;vertical-align:middle}
+
+table{width:100%;border-collapse:collapse}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);font-weight:600;text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
+tr.child td{background:var(--panel2);font-size:12px}
+tr.sel td{background:var(--accent-soft)}
+tbody tr.prow{cursor:pointer}
+tbody tr.prow:hover td{background:color-mix(in srgb,var(--accent-soft) 60%,transparent)}
+td.r,th.r{text-align:right}
+.tw{display:inline-block;width:14px;color:var(--muted)}
+.lbl-main{font-weight:600}
+.lbl-sub{color:var(--muted);font-size:11px;font-family:var(--mono)}
+.spark{display:block}
+.runs-list .row{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--line);flex-wrap:wrap}
+.runs-list .row:first-child{border-top:none}
+pre.spec{margin:0;font-family:var(--mono);font-size:12px;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;max-height:280px}
+.grid2{display:grid;grid-template-columns:1.4fr 1fr;gap:12px}
+@media (max-width:1000px){.grid2{grid-template-columns:1fr}.gantt{grid-template-columns:150px 1fr}}
+
+/* drawer */
+.drawer{position:fixed;top:0;right:0;bottom:0;width:380px;max-width:100%;background:var(--panel);border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(0,0,0,.12);transform:translateX(105%);transition:transform .18s ease;z-index:10;display:flex;flex-direction:column}
+.drawer.on{transform:none}
+.drawer .hd{padding:14px 16px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.drawer .bd{padding:14px 16px;overflow:auto;flex:1}
+.drawer h3{margin:0;font-size:14px}
+.kv{display:grid;grid-template-columns:70px 1fr;gap:3px 10px;font-size:12px;margin-bottom:14px}
+.kv div:nth-child(odd){color:var(--muted)}
+.kv div:nth-child(even){font-family:var(--mono);word-break:break-all}
+.ctl{margin:14px 0}
+.ctl>label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:6px}
+.cores{display:grid;grid-template-columns:repeat(6,1fr);gap:5px}
+.cores button{padding:6px 0;font-family:var(--mono);font-size:11px}
+.cores button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+.seg-toggle{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg-toggle button{border:none;border-radius:0}
+.seg-toggle button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+input[type=range]{width:100%}
+.note{font-size:11px;color:var(--muted);margin-top:4px}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap}
+
+/* system */
+.coregrid{display:grid;grid-template-columns:repeat(12,1fr);gap:6px;align-items:end;height:120px}
+.corebar{background:var(--panel2);border:1px solid var(--line);border-radius:4px;height:100%;position:relative;overflow:hidden}
+.corebar>i{position:absolute;left:0;right:0;bottom:0;background:var(--accent);transition:height .4s}
+.corelbl{display:grid;grid-template-columns:repeat(12,1fr);gap:6px;font-size:10px;color:var(--muted);text-align:center;margin-top:4px}
+.membar{display:flex;height:22px;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+.membar>div{height:100%}
+.hbars .r{display:grid;grid-template-columns:200px 1fr 70px;gap:10px;align-items:center;margin:5px 0;font-size:12px}
+.hbars .r .t{height:10px;background:var(--panel2);border-radius:4px;overflow:hidden}
+.hbars .r .t>i{display:block;height:100%;background:var(--accent)}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:8px 14px;border-radius:8px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:20}
+.toast.on{opacity:.95}
+.mockbadge{font-size:10px;color:var(--warn);border:1px dashed var(--warn);border-radius:4px;padding:0 5px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><span class="dot"></span>procdeck <span class="mockbadge">MOCKUP · fake data</span></div>
+  <nav id="nav">
+    <button data-tab="runs" class="on">Runs</button>
+    <button data-tab="procs">Processes</button>
+    <button data-tab="system">System</button>
+    <button data-tab="history">History</button>
+    <button data-tab="rules">Rules &amp; profiles</button>
+  </nav>
+  <div class="hstats">
+    <div class="hstat"><span class="lbl">CPU</span><svg id="hcpuSpark" class="spark" width="80" height="22"></svg><span class="num" id="hcpu">--%</span></div>
+    <div class="hstat"><span class="lbl">RAM</span><div class="bar warn" id="hramBar"><i style="width:86%"></i></div><span class="num" id="hram">--</span></div>
+    <div class="hstat"><span class="lbl">Commit</span><span class="num" id="hcommit">19.2 / 24.0 GB</span></div>
+    <div class="hstat muted" style="font-size:11px">daemon <span class="num" id="hdaemon">0.6%</span> · 1 s</div>
+  </div>
+</header>
+
+<div class="alert" id="alert">
+  <b>⚠ RAM <span class="num" id="aRam">86%</span></b>
+  <span>At current rate, full in <b class="num" id="aEta">~6 min</b>. Fastest growing: <b>m01-october › sort [M01_2026-10-02]</b> <span class="num">+210 MB/min</span>.</span>
+  <span class="muted">Admission paused automatically. 1 step held.</span>
+  <div class="acts">
+    <button data-toast="Would suspend the lowest-priority procdeck step (stops growth, doesn't free RAM)">Suspend lowest priority</button>
+    <button data-toast="Would resume admitting queued steps">Resume admission</button>
+  </div>
+</div>
+
+<main>
+<!-- RUNS -->
+<section class="tab on" id="tab-runs">
+  <div class="strip">
+    <div class="kpi"><div class="lbl">Running steps</div><div class="v num">2</div><div class="s">of 3 runs</div></div>
+    <div class="kpi"><div class="lbl">Queued / waiting</div><div class="v num">5</div><div class="s">1 held for RAM · 1 scheduled 22:00</div></div>
+    <div class="kpi"><div class="lbl">Free RAM for jobs</div><div class="v num" id="kFree">0.7 GB</div><div class="s">after 1.5 GB headroom</div></div>
+    <div class="kpi"><div class="lbl">Cores committed</div><div class="v num">6 / 12</div><div class="s">profiles: background ×2</div></div>
+  </div>
+
+  <div class="card">
+    <div class="hd">
+      <h2>m01-october</h2>
+      <span class="pill run">● running · 2 of 5 steps</span>
+      <span class="muted" style="font-size:12px">jobs/m01_october.yaml · D:\Code\SpikePostProcessing · submitted by Claude 14:02</span>
+      <div style="margin-left:auto" class="btnrow">
+        <button data-toast="Would pause: no new steps start; running steps continue">Pause</button>
+        <button data-toast="Would raise this run above others in the queue">Priority ↑</button>
+        <button class="danger" data-toast="Would cancel the run and kill running step trees (asks to confirm)">Cancel</button>
+      </div>
+    </div>
+    <div class="bd">
+      <div class="gantt" id="gantt"></div>
+      <div class="legend">
+        <span><i style="background:var(--ok)"></i>done</span>
+        <span><i style="background:var(--run)"></i>running</span>
+        <span><i style="background:var(--bad)"></i>failed</span>
+        <span><i style="background:repeating-linear-gradient(45deg,var(--queued) 0 3px,transparent 3px 5px);border:1px dashed var(--queued)"></i>projected from past runs</span>
+        <span><i style="background:var(--bad);width:2px"></i>now</span>
+        <span style="margin-left:auto">ETA for whole run: <b class="num">16:05</b> (±12 min)</span>
+      </div>
+    </div>
+    <div class="bd" style="border-top:1px solid var(--line)">
+      <div class="grid2">
+        <div>
+          <table>
+            <thead><tr><th>Step</th><th>State</th><th class="r">Elapsed</th><th class="r">CPU</th><th class="r">RAM (est)</th><th>Profile</th><th></th></tr></thead>
+            <tbody id="stepsBody"></tbody>
+          </table>
+        </div>
+        <div>
+          <div class="muted" style="font-size:11px;margin-bottom:6px">SPEC (written by Claude)</div>
+<pre class="spec">name: m01-october
+defaults:
+  cwd: D:/Code/SpikePostProcessing
+  env: spikepost
+  profile: background
+max_parallel: 2
+steps:
+  - name: sort
+    foreach: [M01_2026-10-01, M01_2026-10-02, M01_2026-10-07]
+    cmd: python sort.py --session {item}
+    mem: 6G
+    retries: 1
+  - name: summary
+    needs: [sort]
+    cmd: python summarise.py --mouse M01
+  - name: figs
+    needs: [summary]
+    cmd: matlab -batch "make_figs('M01')"
+    profile: heavy</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card runs-list">
+    <div class="row">
+      <b>mlf-sweep</b><span class="pill q">◷ scheduled 22:00</span>
+      <span class="muted">12 × fit_model.py (foreach λ) · max_parallel 3 · est. 2h 40m, peak 9 GB</span>
+      <span style="margin-left:auto" class="btnrow"><button data-toast="Would start as soon as admission allows">Start now</button><button data-toast="Would open the spec">Spec</button></span>
+    </div>
+    <div class="row">
+      <b>eeg-preproc</b><span class="pill ok">✓ done 12:51</span>
+      <span class="muted">6/6 steps · 1h 12m · 1 retry (filter[S04] failed once: MemoryError)</span>
+      <span style="margin-left:auto" class="btnrow"><button data-toast="Would show logs for each step">Logs</button><button data-toast="Would re-submit the same spec">Re-run</button></span>
+    </div>
+    <div class="row">
+      <b>facemap-batch</b><span class="pill bad">✕ failed 09:14</span>
+      <span class="muted">3/8 steps · stopped on_fail · video_05: CUDA out of memory</span>
+      <span style="margin-left:auto" class="btnrow"><button data-toast="Would retry only the failed and not-yet-run steps">Retry failed</button><button data-toast="Would show the failing step's log tail">Logs</button></span>
+    </div>
+  </div>
+</section>
+
+<!-- PROCESSES -->
+<section class="tab" id="tab-procs">
+  <div class="card">
+    <div class="hd">
+      <h2>Processes</h2><span class="muted" style="font-size:12px">grouped by job tree · labelled by script + folder · click a row to steer</span>
+      <div style="margin-left:auto" class="btnrow">
+        <button data-toast="Filter: only flagged processes">⚑ Flagged (3)</button>
+        <button data-toast="Filter: only procdeck-managed jobs">Managed</button>
+        <select><option>Sort: RAM</option><option>Sort: CPU</option><option>Sort: name</option></select>
+      </div>
+    </div>
+    <div style="overflow:auto">
+      <table>
+        <thead><tr><th>Job / process</th><th class="r">PID</th><th class="r">CPU</th><th>last 60 s</th><th class="r">RAM</th><th class="r">Thr</th><th>Priority</th><th>Cores</th><th>Flags</th></tr></thead>
+        <tbody id="procBody"></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- SYSTEM -->
+<section class="tab" id="tab-system">
+  <div class="grid2">
+    <div class="card"><div class="hd"><h2>CPU per logical core</h2><span class="muted" style="font-size:12px">i7-8700 · 6C / 12T</span></div>
+      <div class="bd"><div class="coregrid" id="coregrid"></div><div class="corelbl" id="corelbl"></div></div></div>
+    <div class="card"><div class="hd"><h2>Memory</h2><span class="muted num" style="font-size:12px">16 GB</span></div>
+      <div class="bd">
+        <div class="membar">
+          <div style="width:72%;background:var(--accent)" title="in use"></div>
+          <div style="width:14%;background:color-mix(in srgb,var(--accent) 40%,transparent)" title="modified / standby"></div>
+          <div style="flex:1;background:var(--panel2)" title="free"></div>
+        </div>
+        <div class="legend"><span><i style="background:var(--accent)"></i>in use 11.5 GB</span><span><i style="background:color-mix(in srgb,var(--accent) 40%,transparent)"></i>cached 2.3 GB</span><span><i style="background:var(--panel2);border:1px solid var(--line)"></i>free 2.2 GB</span><span>commit 19.2 / 24.0 GB</span><span>pagefile 3.1 GB used</span></div>
+        <div class="hbars" style="margin-top:14px" id="topram"></div>
+      </div></div>
+  </div>
+  <div class="card"><div class="hd"><h2>Last 10 minutes</h2><span class="legend" style="margin:0"><span><i style="background:var(--accent)"></i>CPU %</span><span><i style="background:var(--warn)"></i>RAM %</span></span></div>
+    <div class="bd"><svg id="sysChart" width="100%" height="160" viewBox="0 0 600 160" preserveAspectRatio="none"></svg></div></div>
+</section>
+
+<section class="tab" id="tab-history">
+  <div class="card"><div class="hd"><h2>History</h2></div><div class="bd muted">
+    Zoomable CPU/RAM charts over hours and days (SQLite, 5 s resolution), per job and system. Includes a per-script table:
+    <table style="margin-top:10px;color:var(--ink)"><thead><tr><th>Script</th><th class="r">Runs</th><th class="r">Median time</th><th class="r">Peak RAM</th><th class="r">CPU-hours</th></tr></thead>
+    <tbody>
+      <tr><td>SpikePostProcessing / sort.py</td><td class="r num">23</td><td class="r num">48 min</td><td class="r num">6.4 GB</td><td class="r num">9.1</td></tr>
+      <tr><td>SpikePostProcessing / summarise.py</td><td class="r num">7</td><td class="r num">6 min</td><td class="r num">2.1 GB</td><td class="r num">0.3</td></tr>
+      <tr><td>MLF / fit_model.py</td><td class="r num">41</td><td class="r num">13 min</td><td class="r num">3.0 GB</td><td class="r num">11.7</td></tr>
+    </tbody></table>
+    <p>These numbers feed the <code>mem:</code> defaults and the projected bars in the Runs Gantt.</p>
+  </div></div>
+</section>
+
+<section class="tab" id="tab-rules">
+  <div class="grid2">
+    <div class="card"><div class="hd"><h2>Profiles</h2></div><div class="bd">
+<pre class="spec">heavy:
+  cores: 0-9          # leave 2 threads for the desktop
+  cpu_weight: 8
+  priority: normal
+background:
+  cores: 0-5
+  cpu_weight: 2
+  priority: below_normal
+  threads: 6          # OMP/MKL/NUMBA/LOKY + PROCDECK_WORKERS
+tiny:
+  cores: 0-1
+  priority: idle</pre></div></div>
+    <div class="card"><div class="hd"><h2>Rules</h2><span class="muted" style="font-size:12px">applied when a matching process starts</span></div><div class="bd">
+<pre class="spec">- match: {exe: MATLAB.exe, not_managed: true}
+  set: {priority: below_normal}
+- match: {exe: python.exe, cwd: "D:/Code/*", cmd: "*loky*"}
+  set: {profile: background}
+- match: {exe: chrome.exe}
+  set: {efficiency_mode: true}
+
+alerts:
+  ram_warn: 85%
+  ram_critical: 93%
+  on_critical: [pause_admission]   # + suspend_lowest (opt-in)
+  idle_hog: {cpu_below: 1%, for: 30m, ram_above: 1G}</pre></div></div>
+  </div>
+</section>
+</main>
+
+<!-- steer drawer -->
+<aside class="drawer" id="drawer">
+  <div class="hd">
+    <div style="flex:1;min-width:0"><h3 id="dTitle">—</h3><div class="lbl-sub" id="dExe"></div></div>
+    <button id="dClose">✕</button>
+  </div>
+  <div class="bd">
+    <div class="kv" id="dKv"></div>
+    <div class="ctl"><label>Priority</label>
+      <select id="dPri"><option>Idle</option><option>Below normal</option><option>Normal</option><option>Above normal</option><option>High</option></select>
+    </div>
+    <div class="ctl"><label>Cores (applies to whole tree)</label>
+      <div class="cores" id="dCores"></div>
+      <div class="note">Pinning doesn't change how many workers the job spawned; they share the selected cores.</div>
+    </div>
+    <div class="ctl"><label>CPU share</label>
+      <div class="seg-toggle" id="dMode"><button class="on" data-m="weight">Weight</button><button data-m="cap">Hard cap</button><button data-m="none">None</button></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:8px"><input type="range" id="dShare" min="1" max="9" value="3"><span class="num" id="dShareV" style="width:60px;text-align:right">3 / 9</span></div>
+      <div class="note" id="dShareNote">Relative to other jobs: weight 8 gets ~4× the CPU of weight 2 when both are busy.</div>
+    </div>
+    <div class="ctl"><label>Memory</label>
+      <div style="display:flex;gap:8px;align-items:center">warn at <input type="number" value="8" style="width:60px"> GB
+        <label style="display:flex;gap:4px;align-items:center;text-transform:none;letter-spacing:0;color:var(--ink);font-size:12px;margin:0"><input type="checkbox"> hard cap</label></div>
+      <div class="note">A hard cap makes the job crash with MemoryError when it hits the cap.</div>
+    </div>
+    <div class="btnrow" style="margin-top:18px">
+      <button class="primary" data-toast="Would apply priority / cores / CPU share to the process tree">Apply to tree</button>
+      <button data-toast="Would suspend every thread in the tree">Suspend</button>
+      <button class="danger" data-toast="Would kill the whole tree (asks to confirm)">Kill tree</button>
+    </div>
+  </div>
+</aside>
+<div class="toast" id="toast"></div>
+
+<script>
+// ---------- fake data ----------
+const rnd=(a,b)=>a+Math.random()*(b-a), clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const hist=n=>Array.from({length:60},()=>n);
+const procs=[
+ {id:'s1',label:'m01-october › sort [M01_2026-10-01]',managed:true,exe:'python.exe sort.py --session M01_2026-10-01',pid:18244,cpu:10,ram:2.6,thr:22,pri:'Below normal',cores:[0,1,2,3,4,5],flags:[],cwd:'D:\\Code\\SpikePostProcessing',env:'spikepost',started:'14:02',grow:0.001,
+  kids:[{label:'loky worker',pid:18530,cpu:4,ram:0.5},{label:'loky worker',pid:18534,cpu:4,ram:0.5},{label:'loky worker',pid:18540,cpu:4,ram:0.5},{label:'loky worker',pid:18552,cpu:4,ram:0.5}]},
+ {id:'s2',label:'m01-october › sort [M01_2026-10-02]',managed:true,exe:'python.exe sort.py --session M01_2026-10-02',pid:20412,cpu:8,ram:2.4,thr:21,pri:'Below normal',cores:[0,1,2,3,4,5],flags:[],cwd:'D:\\Code\\SpikePostProcessing',env:'spikepost',started:'14:13',grow:0.0035,
+  kids:[{label:'loky worker',pid:20660,cpu:5,ram:0.5},{label:'loky worker',pid:20664,cpu:5,ram:0.5}]},
+ {id:'m1',label:'MATLAB R2025b (desktop)',exe:'MATLAB.exe',pid:9120,cpu:0.4,ram:1.4,thr:96,pri:'Normal',cores:[...Array(12).keys()],flags:['idle'],cwd:'D:\\Code\\VisualResponseAnalysis',env:'—',started:'09:31',idleFor:'47 min'},
+ {id:'o1',label:'multi-area-analysis › fit_glm.py (loky worker)',exe:'python.exe -m joblib.externals.loky…',pid:7764,cpu:0,ram:0.9,thr:9,pri:'Normal',cores:[...Array(12).keys()],flags:['orphan'],cwd:'D:\\Code\\multi-area-analysis',env:'manifolds',started:'yesterday 18:20',parent:'PID 7120 (exited)'},
+ {id:'c1',label:'Chrome',exe:'chrome.exe ×38',pid:4410,cpu:3,ram:1.3,thr:612,pri:'Normal',cores:[...Array(12).keys()],flags:[],cwd:'—',env:'—',started:'08:55'},
+ {id:'t1',label:'Microsoft Teams',exe:'ms-teams.exe ×6',pid:11872,cpu:0,ram:0.5,thr:140,pri:'Normal',cores:[...Array(12).keys()],flags:['hung'],cwd:'—',env:'—',started:'08:56',hungFor:'2 min'},
+ {id:'v1',label:'VS Code',exe:'Code.exe ×14',pid:3388,cpu:2,ram:0.8,thr:290,pri:'Normal',cores:[...Array(12).keys()],flags:[],cwd:'—',env:'—',started:'09:02'},
+ {id:'sy',label:'System & services',exe:'64 processes',pid:'—',cpu:2,ram:0.6,thr:2100,pri:'—',cores:[...Array(12).keys()],flags:[],cwd:'—',env:'—',started:'boot'},
+];
+procs.forEach(p=>{p.ram0=p.ram;p.cpu0=p.cpu;p.h=hist(p.cpu+(p.kids||[]).reduce((s,k)=>s+k.cpu,0)); p.share=p.managed?2:5; p.mode='weight';});
+const FLAG={idle:['warn','idle hog'],orphan:['bad','orphaned'],hung:['bad','not responding']};
+const expanded=new Set(['s1']); let selected=null;
+const totCpu=p=>p.cpu+(p.kids||[]).reduce((s,k)=>s+k.cpu,0);
+const totRam=p=>p.ram+(p.kids||[]).reduce((s,k)=>s+k.ram,0);
+const coresTxt=c=>c.length===12?'all':(c.length&&c.every((v,i)=>i===0||v===c[i-1]+1)?`${c[0]}–${c[c.length-1]}`:c.join(','));
+
+function spark(arr,w=90,h=20,color='var(--accent)',max=100){
+  const pts=arr.map((v,i)=>`${(i/(arr.length-1)*w).toFixed(1)},${(h-1-clamp(v/max,0,1)*(h-2)).toFixed(1)}`).join(' ');
+  return `<svg class="spark" width="${w}" height="${h}"><polyline fill="none" stroke="${color}" stroke-width="1.3" points="${pts}"/></svg>`;
+}
+
+// ---------- processes tab ----------
+function renderProcs(){
+  const rows=[...procs].sort((a,b)=>totRam(b)-totRam(a)).map(p=>{
+    const kids=p.kids||[]; const ex=expanded.has(p.id);
+    const fl=p.flags.map(f=>`<span class="pill ${FLAG[f][0]}">${FLAG[f][1]}</span>`).join(' ')+(p.managed?' <span class="pill run">procdeck</span>':'');
+    let h=`<tr class="prow ${selected===p.id?'sel':''}" data-id="${p.id}">
+      <td><span class="tw" data-tw="${p.id}">${kids.length?(ex?'▾':'▸'):''}</span><span class="lbl-main">${p.label}</span>${kids.length?` <span class="muted">+${kids.length}</span>`:''}<div class="lbl-sub" style="margin-left:14px">${p.exe}</div></td>
+      <td class="r num muted">${p.pid}</td><td class="r num">${totCpu(p).toFixed(1)}%</td><td>${spark(p.h)}</td>
+      <td class="r num">${totRam(p).toFixed(1)} GB</td><td class="r num muted">${p.thr}</td><td>${p.pri}</td><td class="num">${coresTxt(p.cores)}</td><td>${fl}</td></tr>`;
+    if(ex) kids.forEach(k=>{h+=`<tr class="child"><td style="padding-left:34px">${k.label}</td><td class="r num muted">${k.pid}</td><td class="r num">${k.cpu.toFixed(1)}%</td><td></td><td class="r num">${k.ram.toFixed(1)} GB</td><td></td><td class="muted">inherits</td><td class="muted">inherits</td><td></td></tr>`});
+    return h;}).join('');
+  document.getElementById('procBody').innerHTML=rows;
+}
+// pointerdown, not click: the table re-renders every second, which would swallow clicks
+document.getElementById('procBody').addEventListener('pointerdown',e=>{
+  const tw=e.target.closest('[data-tw]');
+  if(tw){const id=tw.dataset.tw; expanded.has(id)?expanded.delete(id):expanded.add(id); renderProcs(); return;}
+  const tr=e.target.closest('tr.prow'); if(tr) openDrawer(tr.dataset.id);
+});
+
+// ---------- drawer ----------
+function openDrawer(id){
+  const p=procs.find(x=>x.id===id); selected=id;
+  document.getElementById('dTitle').textContent=p.label;
+  document.getElementById('dExe').textContent=p.exe;
+  const kv=[['PID',p.pid],['Folder',p.cwd],['Env',p.env],['Started',p.started],['Tree',`${1+(p.kids||[]).length} processes · ${totRam(p).toFixed(1)} GB`]];
+  if(p.parent) kv.push(['Parent',p.parent]); if(p.idleFor) kv.push(['Idle',p.idleFor+' at <1% CPU']); if(p.hungFor) kv.push(['Hung','window not responding for '+p.hungFor]);
+  document.getElementById('dKv').innerHTML=kv.map(([k,v])=>`<div>${k}</div><div>${v}</div>`).join('');
+  document.getElementById('dPri').value=p.pri==='—'?'Normal':p.pri;
+  document.getElementById('dCores').innerHTML=[...Array(12).keys()].map(i=>`<button class="${p.cores.includes(i)?'on':''}" data-c="${i}">${i}</button>`).join('');
+  const share=p.share; setMode(p.mode); document.getElementById('dShare').value=share; shareLabel();
+  document.getElementById('drawer').classList.add('on'); renderProcs();
+}
+document.getElementById('dClose').onclick=()=>{document.getElementById('drawer').classList.remove('on');selected=null;renderProcs();};
+document.getElementById('dCores').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;b.classList.toggle('on');
+  const p=procs.find(x=>x.id===selected); p.cores=[...document.querySelectorAll('#dCores button.on')].map(x=>+x.dataset.c);});
+let mode='weight';
+function setMode(m){mode=m;document.querySelectorAll('#dMode button').forEach(b=>b.classList.toggle('on',b.dataset.m===m));
+  const s=document.getElementById('dShare'); s.disabled=m==='none';
+  if(m==='cap'){s.min=5;s.max=100;s.step=5;} else {s.min=1;s.max=9;s.step=1;} shareLabel();}
+function shareLabel(){const v=document.getElementById('dShare').value;
+  document.getElementById('dShareV').textContent=mode==='weight'?`${v} / 9`:mode==='cap'?`${v}%`:'—';
+  document.getElementById('dShareNote').textContent=mode==='weight'?'Relative to other jobs: weight 8 gets ~4× the CPU of weight 2 when both are busy. Idle CPU is still used.':mode==='cap'?'Hard ceiling as % of the whole machine, even if the CPU is otherwise idle.':'No CPU share limit.';
+  const p=procs.find(x=>x.id===selected); if(p){p.mode=mode;p.share=+v;}}
+document.getElementById('dMode').addEventListener('click',e=>{const b=e.target.closest('button');if(b)setMode(b.dataset.m);});
+document.getElementById('dShare').oninput=shareLabel;
+
+// ---------- runs tab ----------
+const T0=13*60+30, T1=16*60+30, NOW=14*60+44; // minutes
+const pct=m=>((m-T0)/(T1-T0)*100);
+const steps=[
+ {name:'sort',item:'M01_2026-10-01',st:'run',start:14*60+2,end:NOW,proj:14*60+52,cpu:'s1',mem:'6.0 GB (hist 6.4)'},
+ {name:'sort',item:'M01_2026-10-02',st:'run',start:14*60+13,end:NOW,proj:15*60+1,cpu:'s2',mem:'6.0 GB (hist 6.4)'},
+ {name:'sort',item:'M01_2026-10-07',st:'held',start:14*60+52,proj:15*60+40,why:'held: needs 6.0 GB, 0.7 GB free'},
+ {name:'summary',st:'wait',start:15*60+40,proj:15*60+46,why:'needs sort ×3'},
+ {name:'figs',st:'wait',start:15*60+46,proj:16*60+5,why:'needs summary',profile:'heavy'},
+];
+function hm(m){return `${Math.floor(m/60)}:${String(Math.round(m%60)).padStart(2,'0')}`}
+function renderGantt(){
+  let h=`<div></div><div class="axis">${[0,1,2,3,4,5,6].map(i=>`<span style="left:${i/6*100}%">${hm(T0+i*30)}</span>`).join('')}</div>`;
+  steps.forEach(s=>{
+    const lab=`<div class="lab">${s.name}${s.item?` <span class="sub">[${s.item}]</span>`:''}</div>`;
+    let segs='';
+    if(s.st==='run'){segs+=`<div class="seg run" style="left:${pct(s.start)}%;width:${pct(NOW)-pct(s.start)}%">${hm(NOW-s.start).replace(':','h ')}m</div>`;
+      segs+=`<div class="seg proj" style="left:${pct(NOW)}%;width:${pct(s.proj)-pct(NOW)}%">~${hm(s.proj)}</div>`;}
+    else segs+=`<div class="seg proj" style="left:${pct(s.start)}%;width:${pct(s.proj)-pct(s.start)}%">${s.st==='held'?'waiting for RAM':'after deps'}</div>`;
+    h+=lab+`<div class="track">${segs}<div class="now" style="left:${pct(NOW)}%"></div></div>`;
+  });
+  document.getElementById('gantt').innerHTML=h;
+}
+function renderSteps(){
+  document.getElementById('stepsBody').innerHTML=steps.map(s=>{
+    const p=s.cpu&&procs.find(x=>x.id===s.cpu);
+    const state=s.st==='run'?'<span class="pill run">running</span>':s.st==='held'?`<span class="pill warn" title="${s.why}">held · RAM</span>`:`<span class="pill q">${s.why}</span>`;
+    return `<tr><td>${s.name}${s.item?` <span class="muted">[${s.item.slice(4)}]</span>`:''}</td><td>${state}</td>
+      <td class="r num">${s.st==='run'?hm(NOW-s.start):'—'}</td><td class="r num">${p?totCpu(p).toFixed(0)+'%':'—'}</td>
+      <td class="r num">${p?totRam(p).toFixed(1)+' GB':(s.mem||'—')}</td><td>${s.profile||'background'}</td>
+      <td>${s.st==='run'?'<button data-toast="Would open the live log tail">log</button>':''}</td></tr>`;}).join('');
+}
+
+// ---------- system tab ----------
+let cores=Array.from({length:12},()=>rnd(10,60)); const sysCpu=hist(45), sysRam=hist(84);
+function renderSystem(){
+  document.getElementById('coregrid').innerHTML=cores.map(c=>`<div class="corebar"><i style="height:${c}%"></i></div>`).join('');
+  document.getElementById('corelbl').innerHTML=cores.map((c,i)=>`<div>${i}<br><span class="num">${c.toFixed(0)}%</span></div>`).join('');
+  const top=[...procs].sort((a,b)=>totRam(b)-totRam(a)).slice(0,6);
+  document.getElementById('topram').innerHTML=top.map(p=>`<div class="r"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.label}</span><div class="t"><i style="width:${totRam(p)/16*100*3}%"></i></div><span class="num r">${totRam(p).toFixed(1)} GB</span></div>`).join('');
+  const line=(arr,c)=>`<polyline fill="none" stroke="${c}" stroke-width="2" vector-effect="non-scaling-stroke" points="${arr.map((v,i)=>`${i/(arr.length-1)*600},${160-v/100*150}`).join(' ')}"/>`;
+  document.getElementById('sysChart').innerHTML=`<line x1="0" x2="600" y1="${160-85*1.5}" y2="${160-85*1.5}" stroke="var(--warn)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" opacity=".6"/>`+line(sysCpu,'var(--accent)')+line(sysRam,'var(--warn)');
+}
+
+// ---------- header + live tick ----------
+function tick(){
+  procs.forEach(p=>{
+    if(p.flags.includes('idle')||p.flags.includes('orphan')||p.flags.includes('hung')) p.cpu=clamp(p.cpu+rnd(-.2,.2),0,1);
+    else p.cpu=clamp(p.cpu+rnd(-1.5,1.5),Math.max(0.5,p.cpu0-4),p.cpu0+4);
+    (p.kids||[]).forEach(k=>{k.cpu=clamp(k.cpu+rnd(-1,1),2,7)});
+    if(p.grow){p.ram+=p.grow*rnd(0,2); if(p.ram>p.ram0+0.8) p.ram=p.ram0;}
+    p.h.push(totCpu(p)); p.h.shift();
+  });
+  const cpu=clamp(procs.reduce((s,p)=>s+totCpu(p),0),0,100);
+  const ram=procs.reduce((s,p)=>s+totRam(p),0)+0.4;
+  const ramPct=ram/16*100;
+  cores=cores.map(c=>clamp(c+rnd(-12,12),3,100));
+  sysCpu.push(cpu);sysCpu.shift(); sysRam.push(ramPct);sysRam.shift();
+  document.getElementById('hcpu').textContent=cpu.toFixed(0)+'%';
+  document.getElementById('hcpuSpark').innerHTML=spark(sysCpu,80,22).replace(/^<svg[^>]*>|<\/svg>$/g,'');
+  document.getElementById('hram').textContent=`${ram.toFixed(1)} / 16 GB`;
+  const rb=document.getElementById('hramBar'); rb.firstElementChild.style.width=ramPct+'%'; rb.className='bar '+(ramPct>93?'bad':ramPct>85?'warn':'');
+  document.getElementById('aRam').textContent=ramPct.toFixed(0)+'%';
+  const freeMin=Math.max(1,Math.round((16-ram)/0.21*0.9)); document.getElementById('aEta').textContent=`~${freeMin} min`;
+  document.getElementById('kFree').textContent=Math.max(0,16-ram-1.5).toFixed(1)+' GB';
+  document.getElementById('hdaemon').textContent=rnd(.3,.9).toFixed(1)+'%';
+  if(document.getElementById('tab-procs').classList.contains('on')) renderProcs();
+  if(document.getElementById('tab-system').classList.contains('on')) renderSystem();
+  if(document.getElementById('tab-runs').classList.contains('on')) renderSteps();
+}
+
+// ---------- nav + toasts ----------
+document.getElementById('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+  document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.id==='tab-'+b.dataset.tab));
+  ({procs:renderProcs,system:renderSystem,runs:()=>{renderGantt();renderSteps();}})[b.dataset.tab]?.();});
+let tt; document.addEventListener('click',e=>{const b=e.target.closest('[data-toast]');if(!b)return;
+  const t=document.getElementById('toast');t.textContent='Mockup: '+b.dataset.toast;t.classList.add('on');clearTimeout(tt);tt=setTimeout(()=>t.classList.remove('on'),2600);});
+
+renderGantt(); renderSteps(); tick(); setInterval(tick,1000);
+</script>
+</body>
+</html>
