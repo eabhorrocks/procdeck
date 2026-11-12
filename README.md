@@ -13,7 +13,9 @@ It replaces Task Manager for three jobs:
 - **Steer running jobs.** Change priority, pin cores, set a CPU weight or hard cap, or set a memory cap on any process
   tree. RAM alerts give a time-to-full prediction and name the process that's growing.
 
-Dashboard: `procdeck open` → http://127.0.0.1:8857
+Dashboard: `procdeck open` opens http://127.0.0.1:8857 in its own window (Edge app mode; pin it to the taskbar from
+there). `procdeck open --browser` opens a normal tab instead; `dashboard.open_as` in `config/settings.yaml` sets the
+default.
 
 ## Install
 
@@ -64,7 +66,7 @@ dashboard. The daemon reloads within 5 s.
 | runner | `spec.py`, `runner.py`, `launch.py`, `condaenv.py` | spec → step instances; admission by `max_parallel`, thread budget and RAM (minus expected growth of running steps); conda activation cached per env |
 | launcher | `launcher.py` | one per step; puts itself in a named **job object** (cores, CPU weight/cap, memory cap), so every child inherits the limits. It survives daemon restarts, and the daemon re-attaches by PID + create time |
 | steering | `control.py`, `win32.py` | priority and affinity per process; CPU share and memory cap through a job object |
-| store | `store.py` | SQLite in `%LOCALAPPDATA%\procdeck` (runs, steps, 5 s history, per-script stats) |
+| store | `store.py` | SQLite in `~\.procdeck` (runs, steps, 5 s history, per-script stats), with logs and the access token |
 | API + UI | `server.py`, `web/` | FastAPI on 127.0.0.1 only, token header plus Origin check; plain JS dashboard |
 
 ### Behaviour worth knowing
@@ -78,6 +80,13 @@ dashboard. The daemon reloads within 5 s.
 - **Pinning cores doesn't change the worker count.** A job started with 12 workers keeps 12, now sharing the pinned
   cores. Use `PROCDECK_WORKERS` / thread env vars at launch for real worker control.
 - **No admin needed.** procdeck can only steer your own processes; system processes are shown read-only.
+- **Shells inside packaged apps** (such as terminals and agents in the Claude desktop app) have their `AppData`
+  writes silently redirected into the app's private folder, and so does everything they start. procdeck therefore
+  keeps its data in `~\.procdeck`, and `procdeck start` detects the redirection and launches the daemon through
+  WMI, outside the app. Otherwise your jobs' MATLAB preferences, caches etc. would land in the app's private copy
+  of `AppData`. Run `procdeck autostart` from a normal PowerShell window for the same reason.
+- **Shells:** in PowerShell or cmd run `D:\Code\procdeck\bin\procdeck.cmd`; in Git Bash run
+  `/d/Code/procdeck/bin/procdeck`.
 
 ## Tests
 

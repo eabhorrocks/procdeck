@@ -11,7 +11,9 @@ import yaml
 
 REPO_DIR = Path(__file__).resolve().parent.parent
 CONFIG_DIR = Path(os.environ.get("PROCDECK_CONFIG", REPO_DIR / "config"))
-DATA_DIR = Path(os.environ.get("PROCDECK_DATA", Path(os.environ.get("LOCALAPPDATA", Path.home())) / "procdeck"))
+# Not under AppData: Windows redirects AppData writes made from inside packaged apps (e.g. a terminal or agent running
+# inside the Claude desktop app) into a private per-app folder, so two shells would see different tokens/databases.
+DATA_DIR = Path(os.environ.get("PROCDECK_DATA", Path.home() / ".procdeck"))
 LOG_DIR = DATA_DIR / "logs"
 CACHE_DIR = DATA_DIR / "cache"
 DB_PATH = DATA_DIR / "procdeck.sqlite"
@@ -26,6 +28,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "sample_interval": 1.0,
     "history_interval": 5,
     "history_days": 30,
+    "dashboard": {"open_as": "app", "window_size": [1300, 900]},
     "alerts": {"ram_warn": 85, "ram_critical": 93, "commit_warn": 90, "eta_warn_minutes": 5,
                "toast": True, "on_critical": ["pause_admission"]},
     "flags": {"idle_cpu_below": 1.0, "idle_minutes": 30, "idle_ram_gb": 1.0,

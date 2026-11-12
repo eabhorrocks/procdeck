@@ -25,7 +25,7 @@ async function api(method, path, body) {
   const r = await fetch(path, {method, headers: {'x-procdeck-token': TOKEN, 'content-type': 'application/json'},
                                body: body === undefined ? undefined : JSON.stringify(body)});
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.detail || data.errors?.join('\n') || r.statusText);
+  if (!r.ok) { const e = new Error(data.detail || data.errors?.join('\n') || r.statusText); e.status = r.status; throw e; }
   return data;
 }
 let toastT;
@@ -47,7 +47,8 @@ async function poll() {
     render();
   } catch (e) {
     $('liveDot').classList.add('down');
-    $('hdaemon').textContent = TOKEN ? 'daemon not reachable' : 'no token: open with `procdeck open`';
+    $('hdaemon').textContent = e.status === 403 || !TOKEN ? 'access token missing or out of date: reopen with `procdeck open`'
+      : 'daemon not reachable: run `procdeck start`';
   }
 }
 setInterval(poll, 1000);

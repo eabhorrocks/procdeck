@@ -5,6 +5,10 @@ sample_interval: 1.0        # seconds between process samples
 history_interval: 5         # seconds between rows written to the history database
 history_days: 30            # older history rows are deleted
 
+dashboard:
+  open_as: app              # `procdeck open`: app = its own window (Edge app mode), browser = tab in default browser
+  window_size: [1300, 900]
+
 alerts:
   ram_warn: 85              # % of physical RAM in use
   ram_critical: 93

@@ -15,7 +15,8 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .config import DAEMON_LOG, REPO_DIR, ensure_dirs, get_token, load_settings
+from . import win32
+from .config import DAEMON_LOG, REPO_DIR, TOKEN_PATH, ensure_dirs, get_token, load_settings
 
 GB = 1024 ** 3
 CREATE_NEW_PROCESS_GROUP = 0x00000200
@@ -29,8 +30,22 @@ class DaemonDown(Exception):
     pass
 
 
+class ApiError(Exception):
+    def __init__(self, code: int, detail):
+        self.code, self.detail = code, detail
+        super().__init__(f"error {code}: {detail}")
+
+
+def port() -> int:
+    return int(load_settings()["port"])
+
+
 def base_url() -> str:
-    return f"http://127.0.0.1:{load_settings()['port']}"
+    return f"http://127.0.0.1:{port()}"
+
+
+# never route localhost through an HTTP proxy from the environment or registry
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def api(method: str, path: str, body: dict | None = None, timeout: float = 30, autostart: bool = True):
@@ -39,7 +54,7 @@ def api(method: str, path: str, body: dict | None = None, timeout: float = 30, a
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"x-procdeck-token": get_token(), "content-type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _opener.open(req, timeout=timeout) as r:
             return json.loads(r.read() or b"null")
     except urllib.error.HTTPError as e:
         try:
@@ -48,7 +63,7 @@ def api(method: str, path: str, body: dict | None = None, timeout: float = 30, a
             payload = {"detail": str(e)}
         if e.code == 422 and isinstance(payload, dict) and "errors" in payload:
             return payload
-        raise SystemExit(f"error {e.code}: {payload.get('detail', payload) if isinstance(payload, dict) else payload}")
+        raise ApiError(e.code, payload.get("detail", payload) if isinstance(payload, dict) else payload)
     except (urllib.error.URLError, ConnectionError, TimeoutError) as e:
         if autostart:
             start_daemon(quiet=True)
@@ -56,43 +71,108 @@ def api(method: str, path: str, body: dict | None = None, timeout: float = 30, a
         raise DaemonDown(str(e))
 
 
-def daemon_up() -> bool:
+def port_listening() -> bool:
+    import socket
+    s = socket.socket()
+    s.settimeout(2)
     try:
-        api("GET", "/api/top?n=1", timeout=3, autostart=False)
+        s.connect(("127.0.0.1", port()))
         return True
-    except (DaemonDown, SystemExit):
+    except OSError:
         return False
+    finally:
+        s.close()
+
+
+def daemon_state() -> str:
+    """'up' | 'forbidden' (a daemon answers but rejects our token) | 'unresponsive' | 'down'."""
+    try:
+        api("GET", "/api/top?n=1", timeout=10, autostart=False)
+        return "up"
+    except ApiError as e:
+        return "forbidden" if e.code == 403 else "unresponsive"
+    except DaemonDown:
+        return "unresponsive" if port_listening() else "down"
+
+
+def daemon_up() -> bool:
+    return daemon_state() == "up"
+
+
+def _token_mismatch_msg() -> str:
+    return (f"A procdeck daemon is running on port {port()} but rejected the token in {TOKEN_PATH}. "
+            f"It was probably started with a different data folder (older "
+            f"procdeck version, or from a shell whose AppData is redirected). Stop it - end its pythonw.exe "
+            f"('procdeck serve') in Task Manager or with `procdeck stop` from where it was started - then run "
+            f"`procdeck start` again.")
+
+
+def _spawn_outside(argv: list[str]) -> str:
+    """Start argv detached, outside this shell's job object and outside any AppData redirection."""
+    flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_NO_WINDOW
+    if not win32.appdata_redirected():
+        try:
+            subprocess.Popen(argv, cwd=str(REPO_DIR), creationflags=flags | CREATE_BREAKAWAY_FROM_JOB, close_fds=True)
+            return "breakaway"
+        except OSError:
+            pass  # job forbids breakaway: it would kill the daemon when this shell closes
+    # Processes created through WMI are parented by the WMI service: outside our job and our app container.
+    cmdline = subprocess.list2cmdline(argv).replace("'", "''")
+    cwd = str(REPO_DIR).replace("'", "''")
+    ps = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
+          f"@{{CommandLine='{cmdline}'; CurrentDirectory='{cwd}'}}; exit $r.ReturnValue")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                       creationflags=CREATE_NO_WINDOW, check=False, capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(f"could not start {Path(argv[0]).name} via WMI (code {r.returncode}): {r.stderr.strip()[:300]}")
+    return "wmi"
+
+
+def find_app_browser() -> str | None:
+    """Edge (preferred) or Chrome, for opening the dashboard as a standalone app window."""
+    cands = []
+    try:
+        import winreg
+        for exe in ("msedge.exe", "chrome.exe"):
+            for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+                try:
+                    with winreg.OpenKey(hive, rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{exe}") as k:
+                        cands.append(winreg.QueryValue(k, None))
+                except OSError:
+                    pass
+    except ImportError:
+        pass
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"), os.environ.get("LOCALAPPDATA")):
+        if base:
+            cands += [str(Path(base) / "Microsoft" / "Edge" / "Application" / "msedge.exe"),
+                      str(Path(base) / "Google" / "Chrome" / "Application" / "chrome.exe")]
+    cands.sort(key=lambda c: "chrome" in c.lower())  # Edge first
+    return next((c for c in cands if c and os.path.exists(c)), None)
 
 
 def start_daemon(quiet: bool = False) -> None:
-    if daemon_up():
+    state = daemon_state()
+    if state == "up":
         if not quiet:
             print(f"procdeck daemon already running: {dashboard_url()}")
         return
+    if state == "forbidden":
+        raise SystemExit(_token_mismatch_msg())
+    if state == "unresponsive":
+        raise SystemExit(f"Something is listening on port {port()} but not answering procdeck requests. "
+                         f"If it is a stuck procdeck daemon, end its pythonw.exe; otherwise change `port` in "
+                         f"{REPO_DIR / 'config' / 'settings.yaml'}.")
     pyw = str(Path(sys.executable).with_name("pythonw.exe"))
     if not os.path.exists(pyw):
         pyw = sys.executable
-    argv = [pyw, "-m", "procdeck", "serve"]
-    flags = CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS | CREATE_NO_WINDOW
-    how = "breakaway"
-    try:
-        subprocess.Popen(argv, cwd=str(REPO_DIR), creationflags=flags | CREATE_BREAKAWAY_FROM_JOB, close_fds=True)
-    except OSError:
-        # This shell runs inside a job object that forbids breakaway (it would kill the daemon when it closes).
-        # Processes created through WMI are parented outside our job.
-        how = "wmi"
-        cmdline = subprocess.list2cmdline(argv)
-        ps = ("$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments "
-              f"@{{CommandLine='{cmdline}'; CurrentDirectory='{REPO_DIR}'}}; exit $r.ReturnValue")
-        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], creationflags=CREATE_NO_WINDOW,
-                       check=False, capture_output=True)
-    for _ in range(60):
+    how = _spawn_outside([pyw, "-m", "procdeck", "serve"])
+    for _ in range(80):
         time.sleep(0.25)
         if daemon_up():
             if not quiet:
                 print(f"procdeck daemon started ({how}): {dashboard_url()}")
             return
-    raise SystemExit(f"daemon did not start; see {DAEMON_LOG}")
+    raise SystemExit(f"daemon did not start within 20 s; see {DAEMON_LOG}")
 
 
 def dashboard_url() -> str:
@@ -146,6 +226,10 @@ def cmd_serve(a) -> None:
     else:  # pythonw: no console
         sys.stdout = sys.stderr = open(DAEMON_LOG, "a", encoding="utf-8", buffering=1)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
+    if win32.appdata_redirected():
+        logging.getLogger("procdeck").warning(
+            "this daemon's AppData writes (and its jobs') are redirected into an app's private folder; "
+            "start it with `procdeck start` instead, which launches it outside")
     settings = load_settings()
     port = a.port or settings["port"]
     d = Daemon()
@@ -162,8 +246,11 @@ def cmd_start(a) -> None:
 
 
 def cmd_stop(a) -> None:
-    if not daemon_up():
-        print("daemon not running")
+    state = daemon_state()
+    if state == "forbidden":
+        raise SystemExit(_token_mismatch_msg())
+    if state != "up":
+        print("daemon not running" if state == "down" else "daemon not answering; end its pythonw.exe")
         return
     api("POST", "/api/shutdown", {}, autostart=False)
     print("daemon stopping (running steps keep going; they are re-attached on next start)")
@@ -171,9 +258,23 @@ def cmd_stop(a) -> None:
 
 def cmd_open(a) -> None:
     start_daemon(quiet=True)
-    import webbrowser
-    webbrowser.open(dashboard_url())
-    print(dashboard_url())
+    url = dashboard_url()
+    dash = load_settings().get("dashboard") or {}
+    mode = "browser" if a.browser else "app" if a.app else dash.get("open_as", "app")
+    if mode == "app":
+        exe = find_app_browser()
+        if exe:
+            w, h = (dash.get("window_size") or [1300, 900])[:2]
+            _spawn_outside([exe, f"--app={url}", f"--window-size={int(w)},{int(h)}"])
+            print(f"opened the dashboard in its own {Path(exe).stem} window")
+            return
+        print("Edge/Chrome not found; opening your default browser instead")
+    if win32.appdata_redirected():
+        _spawn_outside(["explorer.exe", url])  # from inside a packaged app, hand the URL to the real shell
+    else:
+        import webbrowser
+        webbrowser.open(url)
+    print(f"opened {base_url()} in your default browser")
 
 
 def cmd_url(a) -> None:
@@ -347,6 +448,10 @@ def cmd_install_skill(a) -> None:
 
 
 def cmd_autostart(a) -> None:
+    if win32.appdata_redirected():
+        raise SystemExit("This shell's AppData writes are redirected into an app's private folder (e.g. a terminal "
+                         "inside the Claude desktop app), so a Startup shortcut made here would never run. Run "
+                         "`procdeck autostart on|off` from a normal PowerShell or cmd window.")
     startup = Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
     lnk = startup / "procdeck.lnk"
     if a.state == "off":
@@ -372,7 +477,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_serve)
     sub.add_parser("start", help="start the daemon in the background").set_defaults(fn=cmd_start)
     sub.add_parser("stop", help="stop the daemon (running steps continue)").set_defaults(fn=cmd_stop)
-    sub.add_parser("open", help="open the dashboard in the browser").set_defaults(fn=cmd_open)
+    s = sub.add_parser("open", help="open the dashboard (own window by default; see dashboard.open_as in settings)")
+    g = s.add_mutually_exclusive_group()
+    g.add_argument("--app", action="store_true", help="standalone window (Edge/Chrome app mode)")
+    g.add_argument("--browser", action="store_true", help="a tab in your default browser")
+    s.set_defaults(fn=cmd_open)
     sub.add_parser("url", help="print the dashboard URL (includes the access token)").set_defaults(fn=cmd_url)
 
     s = sub.add_parser("submit", help="submit a pipeline spec (YAML)")
@@ -463,3 +572,7 @@ def main(argv: list[str] | None = None) -> None:
         args.fn(args)
     except DaemonDown as e:
         raise SystemExit(f"procdeck daemon is not reachable ({e}); try `procdeck start`")
+    except ApiError as e:
+        if e.code == 403:
+            raise SystemExit(_token_mismatch_msg())
+        raise SystemExit(f"error {e.code}: {e.detail}")

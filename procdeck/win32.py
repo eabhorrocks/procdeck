@@ -266,6 +266,40 @@ class Job:
         return warns
 
 
+# ---------------------------------------------------------------- AppData redirection
+def appdata_redirected() -> bool:
+    """True if this process's AppData writes are redirected into a packaged app's private folder.
+
+    Happens for processes started from inside an MSIX-packaged app such as the Claude desktop app (even without a
+    package identity of their own). Everything they start inherits it, so the daemon must not be started that way:
+    its jobs' MATLAB prefs, caches etc. would silently land in the app's private copy of AppData.
+    Detected empirically: write a probe file and see whether it shows up under Packages\\*\\LocalCache.
+    """
+    import os
+    import uuid
+    from pathlib import Path
+
+    la = os.environ.get("LOCALAPPDATA")
+    if not la:
+        return False
+    name = f"procdeck-probe-{uuid.uuid4().hex[:12]}"
+    probe = Path(la) / name
+    try:
+        probe.write_text("x")
+    except OSError:
+        return False
+    try:
+        pk = Path(la) / "Packages"
+        return pk.is_dir() and any((d / "LocalCache" / "Local" / name).exists() for d in pk.iterdir())
+    except OSError:
+        return False
+    finally:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+
+
 # ---------------------------------------------------------------- notifications
 def toast(title: str, msg: str) -> None:
     """Fire-and-forget Windows toast notification."""
