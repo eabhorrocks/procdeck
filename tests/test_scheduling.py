@@ -62,3 +62,16 @@ def test_simulate_ram_limits_concurrency():
     # 10 GB avail - 1.5 headroom = 8.5 -> two 4 GB jobs fit at once
     proj = simulate(steps, 0.0, ctx(), {s["key"]: 50 for s in steps})
     assert [proj[f"j{i}"][0] for i in range(3)] == [0.0, 0.0, 50.0]
+
+
+def test_simulate_low_free_ram_now_does_not_serialise_independent_steps():
+    # only 0.1 GB free right now (other processes), but nothing of ours is running: the projection must still
+    # keep dependencies (not queue everything end to end), so independent steps line up.
+    steps = [cand(key="a", name="a", seq=0, mem_gb=1.2, threads=3),
+             cand(key="b", name="b", seq=1, mem_gb=1.2, threads=3, needs=["a"]),
+             cand(key="c", name="c", seq=2, mem_gb=1.2, threads=3),
+             cand(key="d", name="d", seq=3, mem_gb=1.2, threads=1, needs=["b", "c"])]
+    proj = simulate(steps, 0.0, ctx(avail_gb=0.1), {s["key"]: 100 for s in steps})
+    assert proj["a"][0] == proj["c"][0] == 0.0
+    assert proj["b"][0] == 100.0
+    assert proj["d"][0] == 200.0

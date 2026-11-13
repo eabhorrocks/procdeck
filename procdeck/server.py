@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import WEB_DIR, config_path, validate_config_text
+from .control import Refused
 from .daemon import Daemon
 from .spec import SpecError, parse as parse_spec
 from . import condaenv
@@ -70,8 +71,27 @@ def create_app(d: Daemon, token: str, port: int, on_shutdown=None) -> FastAPI:
         return {"ok": True, "run_id": run_id, "name": plan.name, "steps": len(plan.steps), "warnings": plan.warnings}
 
     @app.get("/api/runs")
-    def runs(limit: int = 30):
-        return d.runner.runs_view(limit)
+    def runs(limit: int = 30, all: bool = False):  # noqa: A002 - query parameter name
+        return d.runner.runs_view(limit, include_hidden=all)
+
+    @app.post("/api/runs/forget")
+    def forget_runs(body: dict = Body(...)):
+        """{"runs": [ref, ...]} hides those runs; {"states": ["cancelled", ...]} hides every run in those states;
+        {"runs": [...], "undo": true} lists them again."""
+        with d.op_lock:
+            if body.get("states"):
+                ids = d.runner.clear(list(body["states"]))
+            else:
+                ids = [run_or_404(ref)["id"] for ref in body.get("runs") or []]
+                if body.get("undo"):
+                    d.store.set_hidden(ids, False)
+                else:
+                    try:
+                        d.runner.forget(ids)
+                    except ValueError as e:
+                        raise HTTPException(409, str(e))
+        d._runs_t = 0
+        return {"ok": True, "runs": ids, "undo": bool(body.get("undo"))}
 
     @app.get("/api/runs/{ref}")
     def run_detail(ref: str):
@@ -99,6 +119,20 @@ def create_app(d: Daemon, token: str, port: int, on_shutdown=None) -> FastAPI:
                 return {"ok": True, "retried": n}
             elif a == "priority":
                 d.runner.set_priority(r["id"], int(body.get("value", 0)))
+            elif a == "max_parallel":
+                d.runner.set_max_parallel(r["id"], body.get("value"))
+            elif a in ("move", "needs", "parallel"):
+                try:
+                    if a == "move":
+                        res = d.runner.move_step(r["id"], key, body.get("before"), body.get("rewire", True))
+                    elif a == "needs":
+                        res = d.runner.set_needs(r["id"], key, list(body.get("needs") or []))
+                    else:
+                        res = d.runner.make_parallel(r["id"], list(body.get("keys") or []))
+                except ValueError as e:
+                    raise HTTPException(409, str(e))
+                d._runs_t = 0
+                return {"ok": True, **res}
             else:
                 raise HTTPException(400, f"unknown action {a!r}")
         d._runs_t = 0
@@ -133,6 +167,8 @@ def create_app(d: Daemon, token: str, port: int, on_shutdown=None) -> FastAPI:
         try:
             with d.op_lock:
                 return d.ctl.signal(pid, a)
+        except Refused as e:
+            raise HTTPException(409, str(e))
         except ValueError as e:
             raise HTTPException(404, str(e))
 

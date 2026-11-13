@@ -27,7 +27,7 @@ flags:
   orphan_watch: [python.exe, pythonw.exe, matlab.exe, julia.exe, r.exe, rscript.exe, rterm.exe, node.exe, java.exe]
 
 admission:
-  headroom_gb: 1.5          # RAM kept free for the desktop when deciding whether a step can start
+  headroom_gb: 0.8        # RAM kept free for the desktop when deciding whether a step can start
   default_mem_gb: 1.0       # estimate for steps with no `mem:` and no history
   cpu_threads_budget: 12    # sum of `threads` across running steps (one step may always run)
   max_running: null         # optional hard cap on concurrently running steps

@@ -17,6 +17,10 @@ PRIORITY = {"idle": psutil.IDLE_PRIORITY_CLASS, "below_normal": psutil.BELOW_NOR
             "high": psutil.HIGH_PRIORITY_CLASS}
 
 
+class Refused(Exception):
+    """The action is not allowed on this process."""
+
+
 class Controller:
     def __init__(self, sampler, runner):
         self.sampler = sampler
@@ -55,8 +59,15 @@ class Controller:
                         warns.append(f"pid {p}: {e.strerror if hasattr(e, 'strerror') else e}")
         return job, warns
 
+    def protected(self) -> set[int]:
+        """The daemon and step launchers. A tree action on an ancestor (e.g. the daemon, or the terminal that
+        started it) must not reach them: their subtrees are running steps, which are changed only via their run."""
+        out = {self.sampler.self_pid} | set(self.runner.managed)
+        out |= {r.pid for r in self.sampler.rows.values() if r.kind in ("daemon", "launcher")}
+        return out
+
     def tree(self, pid: int) -> list[int]:
-        pids = self.sampler.tree_pids(pid)
+        pids = self.sampler.tree_pids(pid, stop=self.protected())
         if not pids:
             raise ValueError(f"process {pid} not found")
         return pids
@@ -156,9 +167,13 @@ class Controller:
                           cpu_value=val, mem_cap_gb=prof.get("mem_cap_gb"), tree=tree)
 
     def signal(self, pid: int, action: str) -> dict:
-        """suspend | resume | kill the whole tree."""
+        """suspend | resume | kill the whole tree (minus the daemon and any running steps inside it)."""
+        if action != "resume" and pid == self.sampler.self_pid:
+            raise Refused(f"won't {action} the procdeck daemon itself; use `procdeck stop` "
+                          "(running steps keep going and are re-attached on the next start)")
         if action == "kill" and pid in self.runner.managed:
             m = self.runner.managed[pid]
+            log.info("kill %s: cancelling step %s/%s", pid, m["run"], m["step"])
             self.runner.cancel(m["run_id"], m["step"])
             return {"pid": pid, "applied": ["cancelled step"], "warnings": []}
         pids = self.tree(pid)
@@ -171,6 +186,8 @@ class Controller:
             except psutil.Error:
                 bad += 1
         warns = [f"{bad}/{len(pids)} processes refused or already exited"] if bad else []
+        r = self.sampler.rows.get(pid)
+        log.info("%s %s (%s): %d processes %s %s", action, pid, r.label or r.name if r else "?", len(pids), pids, warns)
         return {"pid": pid, "processes": len(pids), "applied": [action], "warnings": warns}
 
 

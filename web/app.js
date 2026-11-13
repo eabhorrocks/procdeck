@@ -37,6 +37,8 @@ function onPress(el, fn) { el.addEventListener('pointerdown', e => { if (e.butto
 // ---------------------------------------------------------------- state + polling
 let S = null, tab = ls.get('procdeck_tab', 'runs'), selRun = ls.get('procdeck_run', null), runDetail = null;
 let selLog = null, logText = '', drawerPid = null, drawerGid = null;
+let dragKey = null, dropAt = null;        // step being dragged / {key, below} the row it would land next to
+const selSteps = new Set();               // waiting steps ticked for "run in parallel"
 const expanded = new Set();
 let procView = 'all', procSort = 'rss';
 
@@ -112,8 +114,11 @@ function renderRuns() {
     <div class="kpi"><div class="lbl">Free RAM for new steps</div><div class="v num">${(ad.free_gb ?? 0).toFixed(1)} GB</div><div class="s">after ${ad.headroom_gb ?? '-'} GB headroom${ad.outstanding_gb > 0.05 ? ` and ${ad.outstanding_gb.toFixed(1)} GB reserved for running steps` : ''}</div></div>
     <div class="kpi"><div class="lbl">Threads committed</div><div class="v num">${ad.threads_running ?? 0} / ${ad.threads_budget ?? '-'}</div><div class="s">${S.system.ncpu} logical CPUs</div></div>`;
   $('runsCount').textContent = runs.length ? `${runs.length} recent` : '';
+  const finishedN = runs.filter(r => ['done', 'failed', 'cancelled'].includes(r.state)).length;
+  $('clearRuns').style.display = finishedN ? '' : 'none';
+  $('clearRuns').textContent = `Clear ${finishedN} finished`;
   if (!runs.length) {
-    $('runList').innerHTML = `<div class="empty">No runs yet.<br><br>Ask Claude to set up an analysis run, or<br><code>procdeck submit jobs/my_run.yaml</code></div>`;
+    $('runList').innerHTML = `<div class="empty">No runs to show.<br><br>Ask Claude to set up an analysis run, or<br><code>procdeck submit jobs/my_run.yaml</code><br><br><span class="muted">Cleared runs: <code>procdeck status --all</code></span></div>`;
   } else {
     if (!selRun || !runs.some(r => r.id === selRun)) { selRun = runs[0].id; ls.set('procdeck_run', selRun); loadRun(); }
     $('runList').innerHTML = runs.map(r => {
@@ -129,6 +134,14 @@ function renderRuns() {
 }
 onPress($('runList'), e => { const row = e.target.closest('[data-run]'); if (!row) return;
   selRun = row.dataset.run; ls.set('procdeck_run', selRun); selLog = null; logText = ''; runDetail = null; renderRuns(); loadRun(); });
+function afterForget(msg) { toast(msg); selRun = null; selLog = null; logText = ''; runDetail = null; $('runDetail').innerHTML = ''; setTimeout(poll, 300); }
+$('clearRuns').addEventListener('click', async () => {
+  const fin = (S?.runs || []).filter(r => ['done', 'failed', 'cancelled'].includes(r.state));
+  if (!fin.length || !confirm(`Remove ${fin.length} finished run(s) (done, failed and cancelled) from the list?\n\n` +
+      `Logs and timing history are kept; \`procdeck status --all\` still shows them.`)) return;
+  try { const r = await api('POST', '/api/runs/forget', {states: ['done', 'failed', 'cancelled']}); afterForget(`${r.runs.length} run(s) cleared`); }
+  catch (err) { toast('Error: ' + err.message); }
+});
 
 async function loadRun() {
   if (!selRun) { $('runDetail').innerHTML = ''; return; }
@@ -139,7 +152,7 @@ async function loadRun() {
 
 function niceStep(span) { const c = [60, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200, 86400]; return c.find(x => span / x <= 8) || 86400; }
 function renderRunDetail() {
-  const r = runDetail; if (!r) return;
+  const r = runDetail; if (!r || dragKey) return;   // a re-render would cancel an in-progress drag
   const now = Date.now() / 1000, steps = r.steps;
   let t0 = Math.min(...steps.map(s => s.started_at || s.proj_start || now), r.submitted_at);
   let t1 = Math.max(...steps.map(s => s.ended_at || s.proj_end || now), now);
@@ -164,8 +177,17 @@ function renderRunDetail() {
     }
     gantt += `<div class="lab" title="${esc(s.key)}">${esc(s.key)}</div><div class="track">${seg}${now > t0 && now < t1 ? `<div class="now" style="left:${pct(now)}%"></div>` : ''}</div>`;
   }
+  const active = ['queued', 'running'].includes(r.state);
+  const stateOf = Object.fromEntries(steps.map(s => [s.key, s.state]));
+  for (const k of [...selSteps]) if (stateOf[k] !== 'waiting') selSteps.delete(k);
   const rows = steps.map(s => {
     const el = s.started_at ? (s.ended_at || now) - s.started_at : null;
+    const canEdit = active && s.state === 'waiting';
+    const open = canEdit ? s.needs.filter(n => stateOf[n] && stateOf[n] !== 'done') : [];
+    const chips = open.slice(0, 3).map(n => `<span class="chip" title="${esc(n)}">${esc(n)}</span>`).join('') + (open.length > 3 ? ` <span class="muted">+${open.length - 3}</span>` : '');
+    const waits = !canEdit ? '' : open.length ? `<span class="muted">after</span> ${chips}` : '<span class="muted">starts as soon as resources allow</span>';
+    const lead = canEdit ? `<td class="grip" title="drag to reorder"><span class="chk ${selSteps.has(s.key) ? 'on' : ''}" data-sel="${esc(s.key)}" title="select, then “Run selected in parallel”"></span><span class="gripi">⠿</span></td>` : '<td class="grip"></td>';
+    const wacts = canEdit ? ` <button class="sm" data-after="${esc(s.key)}" title="choose what this step waits for">after…</button>${open.length ? ` <button class="sm" data-release="${esc(s.key)}" title="stop waiting for anything: run as soon as resources allow">∥</button>` : ''}` : '';
     const g = s.state === 'running' ? S?.groups.find(x => x.kind === 'managed' && x.pid === s.pid) : null;
     const info = s.error || s.held_reason || '';
     const pill = s.state === 'waiting' && s.held_reason && /RAM|budget|paused|max_parallel/.test(s.held_reason) ? 'held' : s.state;
@@ -174,42 +196,136 @@ function renderRunDetail() {
     if (['failed', 'cancelled', 'skipped'].includes(s.state)) acts.push(`<button class="sm" data-step-retry="${esc(s.key)}">retry</button>`);
     if (s.state === 'waiting') acts.push(`<button class="sm" data-step-cancel="${esc(s.key)}">skip</button>`);
     const hist = s.history ? `typical ${dur(s.history.median_s)}, peak ${s.history.peak_gb.toFixed(1)} GB (${s.history.n} runs)` : 'no history yet';
-    return `<tr class="${selLog === s.key ? 'sel' : ''}"><td title="${esc(s.cmd)}">${esc(s.key)}</td><td><span class="pill ${pill}">${s.state}${s.attempt > 1 ? ' · try ' + s.attempt : ''}</span></td>
+    return `<tr class="${selLog === s.key ? 'sel' : ''}"${canEdit ? ` draggable="true" data-wkey="${esc(s.key)}"` : ''}>${lead}<td title="${esc(s.cmd)}">${esc(s.key)}</td><td><span class="pill ${pill}">${s.state}${s.attempt > 1 ? ' · try ' + s.attempt : ''}</span></td>
       <td class="r num">${dur(el)}</td><td class="r num">${g ? g.cpu.toFixed(0) + '%' : '-'}</td>
       <td class="r num" title="${esc(hist)}">${g ? gb(g.rss) : s.peak_rss ? gb(s.peak_rss) : '-'} <span class="muted">/ ${s.mem_gb != null ? s.mem_gb.toFixed(1) : '-'}</span></td>
-      <td>${esc(s.profile)}</td><td class="wrap muted" style="font-size:12px">${esc(info)}</td><td style="white-space:nowrap">${acts.join(' ')}</td></tr>`;
+      <td>${esc(s.profile)}</td><td class="waits">${waits}${wacts}</td><td class="wrap muted" style="font-size:12px">${esc(info)}</td><td style="white-space:nowrap">${acts.join(' ')}</td></tr>`;
   }).join('');
-  const active = ['queued', 'running'].includes(r.state);
+  const nWaiting = steps.filter(s => s.state === 'waiting').length, nSel = selSteps.size;
+  const queuebar = active && nWaiting ? `<div class="queuebar"><span class="muted">Drag <b>⠿</b> to reorder waiting steps · tick steps to run them together</span>
+      <button class="sm" data-par-sel ${nSel ? '' : 'disabled'}>${nSel > 1 ? `Run ${nSel} selected in parallel` : nSel === 1 ? 'Start selected without waiting' : 'Run selected in parallel'}</button>
+      <span style="margin-left:auto" class="muted">Max at once: <b class="num">${r.max_parallel || 'no limit'}</b> <button class="sm" data-maxpar title="how many steps of this run may run at the same time (RAM and CPU budgets still apply)">change</button></span></div>` : '';
   const failedN = steps.filter(s => ['failed', 'cancelled', 'skipped'].includes(s.state)).length;
   const html = `<div class="card">
     <div class="hd"><h2>${esc(r.name)}</h2><span class="pill ${r.state}">${r.state}${r.paused ? ' · paused' : ''}</span>
-      <span class="muted" style="font-size:12px">${esc(r.id)} · ${r.spec_path ? esc(r.spec_path) + ' · ' : ''}submitted ${hm(r.submitted_at)}${r.submitted_by ? ' by ' + esc(r.submitted_by) : ''} · priority ${r.priority}${r.eta && active ? ' · ETA ' + hm(r.eta) : ''}</span>
+      <span class="muted" style="font-size:12px">${esc(r.id)} · ${r.spec_path ? esc(r.spec_path) + ' · ' : ''}submitted ${hm(r.submitted_at)}${r.submitted_by ? ' by ' + esc(r.submitted_by) : ''} · priority ${r.priority}${r.max_parallel ? ' · max ' + r.max_parallel + ' at once' : ''}${r.eta && active ? ' · ETA ' + hm(r.eta) : ''}</span>
       <div style="margin-left:auto" class="btnrow">
         ${active ? `<button data-run-act="${r.paused ? 'resume' : 'pause'}">${r.paused ? 'Resume' : 'Pause'}</button>` : ''}
         ${active ? `<button data-run-act="prio-up" title="higher priority runs get free slots first">Priority ↑</button><button data-run-act="prio-down">↓</button>` : ''}
         ${failedN ? `<button data-run-act="retry">Retry ${failedN} failed</button>` : ''}
         ${active ? `<button class="danger" data-run-act="cancel">Cancel run</button>` : ''}
+        ${!active && !r.hidden ? `<button data-run-forget title="hide this run from the list (logs and timing history are kept)">Remove from list</button>` : ''}
       </div></div>
     ${r.description ? `<div class="bd muted" style="border-bottom:1px solid var(--line)">${esc(r.description)}</div>` : ''}
     <div class="bd"><div class="gantt">${gantt}</div>
       <div class="legend"><span><i style="background:var(--ok)"></i>done</span><span><i style="background:var(--run)"></i>running</span><span><i style="background:var(--bad)"></i>failed</span>
       <span><i style="background:repeating-linear-gradient(45deg,var(--queued) 0 3px,transparent 3px 5px);border:1px dashed var(--queued)"></i>projected (past runs, or 10 min if unknown)</span><span><i style="background:var(--bad);width:2px"></i>now</span></div></div>
-    <div class="tablewrap" style="border-top:1px solid var(--line)"><table><thead><tr><th>Step</th><th>State</th><th class="r">Time</th><th class="r">CPU</th><th class="r">RAM / est</th><th>Profile</th><th>Info</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${queuebar}
+    <div class="tablewrap" style="border-top:1px solid var(--line)"><table id="stepTable"><thead><tr><th></th><th>Step</th><th>State</th><th class="r">Time</th><th class="r">CPU</th><th class="r">RAM / est</th><th>Profile</th><th>Waits for</th><th>Info</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
   </div>
   ${selLog ? `<div class="card"><div class="hd"><h2>Log · ${esc(selLog)}</h2><button class="sm" data-log-close style="margin-left:auto">close</button></div><div class="bd"><pre class="log" id="logPre">${esc(logText) || '<span class="muted">(empty)</span>'}</pre></div></div>` : ''}
   <div class="card"><div class="hd"><h2>Spec</h2></div><div class="bd"><pre class="spec">${esc(r.spec_text || '')}</pre></div></div>`;
   const pre = $('logPre'), atBottom = pre ? pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20 : true;
+  // innerHTML below recreates every scrollable box, which would snap them back to the top on each refresh;
+  // remember their scroll offsets (spec, log, step table) and put them back afterwards
+  const SCROLLERS = ['pre.spec', 'pre.log', '.tablewrap'];
+  const saved = SCROLLERS.map(sel => { const el = $('runDetail').querySelector(sel); return el ? [sel, el.scrollTop, el.scrollLeft] : null; }).filter(Boolean);
   $('runDetail').innerHTML = html;
+  for (const [sel, top, left] of saved) { const el = $('runDetail').querySelector(sel); if (el) { el.scrollTop = top; el.scrollLeft = left; } }
   const npre = $('logPre'); if (npre && atBottom) npre.scrollTop = npre.scrollHeight;
 }
+const runAction = (body) => api('POST', `/api/runs/${encodeURIComponent(runDetail.id)}/action`, body);
+const adjusted = r => { const n = Object.keys(r.needs_changed || {}).length; return n ? ` (${n} dependenc${n > 1 ? 'ies' : 'y'} rewired)` : ''; };
+
+// ---- drag to reorder waiting steps (native HTML5 drag and drop; the live re-render is paused while dragging)
+function clearDrop() { document.querySelectorAll('#stepTable tr.drop-above, #stepTable tr.drop-below, #stepTable tr.dragging')
+  .forEach(x => x.classList.remove('drop-above', 'drop-below', 'dragging')); }
+$('runDetail').addEventListener('dragstart', e => {
+  const tr = e.target.closest?.('tr[data-wkey]'); if (!tr) return;
+  dragKey = tr.dataset.wkey; dropAt = null; tr.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragKey);
+});
+$('runDetail').addEventListener('dragover', e => {
+  if (!dragKey) return;
+  const tr = e.target.closest?.('tr[data-wkey]'); if (!tr) return;
+  e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+  const rect = tr.getBoundingClientRect(), below = e.clientY > rect.top + rect.height / 2;
+  dropAt = {key: tr.dataset.wkey, below};
+  document.querySelectorAll('#stepTable tr.drop-above, #stepTable tr.drop-below').forEach(x => x.classList.remove('drop-above', 'drop-below'));
+  tr.classList.add(below ? 'drop-below' : 'drop-above');
+});
+$('runDetail').addEventListener('drop', async e => {
+  if (!dragKey) return;
+  e.preventDefault();
+  const key = dragKey, at = dropAt;
+  let before = null;
+  if (at) {
+    const waiting = runDetail.steps.filter(s => s.state === 'waiting').map(s => s.key);
+    before = at.below ? (waiting[waiting.indexOf(at.key) + 1] ?? null) : at.key;
+  }
+  dragKey = null; dropAt = null; clearDrop();
+  if (!at || before === key) { renderRunDetail(); return; }
+  try { const r = await runAction({action: 'move', key, before}); toast(`moved ${key}${adjusted(r)}`); }
+  catch (err) { toast('Error: ' + err.message); }
+  loadRun();
+});
+$('runDetail').addEventListener('dragend', () => { dragKey = null; dropAt = null; clearDrop(); renderRunDetail(); });
+
+// ---- "after…" dialog: choose exactly what a waiting step waits for
+function dependents(key) {   // steps that (transitively) wait for `key`; they cannot also be something it waits for
+  const out = new Set(), stack = [key];
+  while (stack.length) { const k = stack.pop(); for (const s of runDetail.steps) if (s.needs.includes(k) && !out.has(s.key)) { out.add(s.key); stack.push(s.key); } }
+  return out;
+}
+function openAfterDialog(key) {
+  const step = runDetail.steps.find(s => s.key === key); if (!step) return;
+  const blocked = dependents(key);
+  $('needsTitle').textContent = key;
+  $('needsList').innerHTML = runDetail.steps.filter(s => s.key !== key).map(s => {
+    const dis = blocked.has(s.key);
+    return `<label class="${dis ? 'dis' : ''}"><input type="checkbox" value="${esc(s.key)}" ${step.needs.includes(s.key) ? 'checked' : ''} ${dis ? 'disabled' : ''}>
+      <span class="ellip">${esc(s.key)}</span><span class="pill ${s.state}">${s.state}</span>${dis ? '<span class="muted">waits for this step</span>' : ''}</label>`;
+  }).join('');
+  $('needsDlg').dataset.key = key; $('needsDlg').showModal();
+}
+$('needsList').addEventListener('input', () => { /* nothing live: Save reads the boxes */ });
+$('needsAll').addEventListener('click', () => $('needsList').querySelectorAll('input:not(:disabled)').forEach(i => { i.checked = true; }));
+$('needsNone').addEventListener('click', () => $('needsList').querySelectorAll('input').forEach(i => { i.checked = false; }));
+$('needsCancel').addEventListener('click', () => $('needsDlg').close());
+$('needsSave').addEventListener('click', async () => {
+  const key = $('needsDlg').dataset.key, needs = [...$('needsList').querySelectorAll('input:checked')].map(i => i.value);
+  $('needsDlg').close();
+  try { await runAction({action: 'needs', key, needs}); toast(needs.length ? `${key} now waits for ${needs.length} step(s)` : `${key} starts as soon as resources allow`); loadRun(); }
+  catch (err) { toast('Error: ' + err.message); }
+});
+
 onPress($('runDetail'), async e => {
+  const sel = e.target.closest('[data-sel]');
+  if (sel) { const k = sel.dataset.sel; selSteps.has(k) ? selSteps.delete(k) : selSteps.add(k); renderRunDetail(); return; }
   const t = e.target.closest('button'); if (!t || !runDetail) return;
   const rid = encodeURIComponent(runDetail.id);
   try {
-    if (t.dataset.log) { selLog = t.dataset.log; logText = ''; await loadRun(); }
+    if (t.dataset.after) { openAfterDialog(t.dataset.after); }
+    else if (t.dataset.release) { await runAction({action: 'needs', key: t.dataset.release, needs: []}); toast(`${t.dataset.release} no longer waits for anything`); loadRun(); }
+    else if (t.dataset.parSel !== undefined) {
+      const keys = [...selSteps]; if (!keys.length) return;
+      const r = await runAction({action: 'parallel', keys}); selSteps.clear();
+      const mp = r.max_parallel_raised ? `; max at once raised ${r.max_parallel_raised.from} → ${r.max_parallel_raised.to}` : '';
+      toast((keys.length > 1 ? `${keys.length} steps can now run in parallel${adjusted(r)}` : `${keys[0]} no longer waits for anything`) + mp); loadRun();
+    }
+    else if (t.dataset.maxpar !== undefined) {
+      const cur = runDetail.max_parallel || '';
+      const v = prompt('How many steps of this run may run at the same time?\n(blank or 0 = no limit; the RAM and CPU budgets still apply)', cur);
+      if (v === null) return;
+      const n = parseInt(v, 10);
+      await runAction({action: 'max_parallel', value: Number.isFinite(n) && n > 0 ? n : null});
+      toast(n > 0 ? `max ${n} at once` : 'no per-run limit'); loadRun();
+    }
+    else if (t.dataset.log) { selLog = t.dataset.log; logText = ''; await loadRun(); }
     else if (t.dataset.logClose !== undefined) { selLog = null; renderRunDetail(); }
     else if (t.dataset.steerPid) { const g = S.groups.find(x => x.pid == t.dataset.steerPid); if (g) openDrawer(g.id); else toast('process not in the last sample yet'); }
     else if (t.dataset.stepCancel) { if (confirm(`Stop step ${t.dataset.stepCancel}?`)) { await api('POST', `/api/runs/${rid}/action`, {action: 'cancel', key: t.dataset.stepCancel}); toast('step cancelled'); loadRun(); } }
+    else if (t.dataset.runForget !== undefined) { await api('POST', '/api/runs/forget', {runs: [runDetail.id]}); afterForget(`${runDetail.name} removed from the list`); }
     else if (t.dataset.stepRetry) { await api('POST', `/api/runs/${rid}/action`, {action: 'retry', key: t.dataset.stepRetry}); toast('step queued again'); loadRun(); }
     else if (t.dataset.runAct) {
       const a = t.dataset.runAct;
@@ -269,7 +385,12 @@ function openDrawer(gid) {
   $('dMem').value = ''; $('dResult').style.display = 'none';
   setMode('none');
   const sys = g.kind === 'system', app = g.kind === 'app';
+  const daemon = g.kind_root === 'daemon';
   for (const id of ['dApply', 'dSuspend', 'dResume', 'dKill']) $(id).disabled = sys;
+  for (const id of ['dSuspend', 'dKill']) {
+    $(id).disabled = sys || daemon;
+    $(id).title = daemon ? 'This is procdeck itself: stop it with `procdeck stop` (running steps keep going)' : '';
+  }
   $('dApply').textContent = app && g.nproc > 1 ? 'Apply to oldest process tree' : 'Apply to tree';
   updateDrawerLive();
   $('drawer').classList.add('on'); renderProcs();

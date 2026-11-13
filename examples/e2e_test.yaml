@@ -5,7 +5,7 @@ name: e2e-test
 description: Fan-out RAM eaters limited by admission control, a flaky step with a retry, then a summary in a conda env.
 max_parallel: 3
 defaults:
-  cwd: D:/Code/procdeck
+  cwd: ..                # repo root (relative paths resolve against this file's folder)
   env: base
   profile: background
 steps:
@@ -22,6 +22,6 @@ steps:
 
   - name: summary
     needs: [eat, flaky]
-    env: spikepost
+    env: procdeck
     mem: 0.2G
     cmd: python tools/sleep_job.py --seconds 5 --label summary

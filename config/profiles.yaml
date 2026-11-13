@@ -22,7 +22,7 @@ heavy:
   cpu_weight: 8
 
 background:
-  cores: 6-11             # physical cores 3-5; leaves 0-5 free for the desktop and heavy jobs
+  cores: 2-11             # physical cores 1-5; leaves physical core 0 (CPUs 0-1) free for the desktop
   threads: 6
   priority: below_normal
   cpu_weight: 2

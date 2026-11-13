@@ -13,7 +13,7 @@ from pathlib import Path
 
 import psutil
 
-from . import launch, win32
+from . import launch, replan, win32
 from .config import LOG_DIR, REPO_DIR, format_cores, parse_cores
 from .labels import script_key_from_cmd
 from .spec import Plan
@@ -85,6 +85,7 @@ def simulate(steps: list[dict], now: float, ctx: dict, durations: dict[str, floa
             active.append({"s": s, "end": end, "sim": False})
     pending = sorted((s for s in steps if s["key"] not in proj), key=lambda s: s.get("seq", 0))
     t, sim_mem = now, 0.0
+    relaxed = False  # True: assume today's RAM pressure from other processes has cleared
     for _guard in range(10000):
         if not pending:
             break
@@ -103,7 +104,7 @@ def simulate(steps: list[dict], now: float, ctx: dict, durations: dict[str, floa
                 run_running[r["run_id"]] = run_running.get(r["run_id"], 0) + 1
                 step_running[(r["run_id"], r["name"])] = step_running.get((r["run_id"], r["name"]), 0) + 1
             sctx = {**ctx, "running": len(active), "threads_running": sum(a["s"]["threads"] for a in active),
-                    "avail_gb": ctx["avail_gb"] - sim_mem, "outstanding_gb": 0.0,
+                    "avail_gb": (ctx["total_gb"] if relaxed else ctx["avail_gb"]) - sim_mem, "outstanding_gb": 0.0,
                     "run_running": run_running, "step_running": step_running}
             if admit(s, sctx)[0]:
                 proj[s["key"]] = (t, t + dur(s))
@@ -114,6 +115,11 @@ def simulate(steps: list[dict], now: float, ctx: dict, durations: dict[str, floa
             break
         nxt = [a["end"] for a in active if a["end"] > t]
         nxt += [s["start_at"] for s in pending if s.get("start_at") and s["start_at"] > t]
+        if not nxt and not relaxed:
+            # Nothing running and nothing admitted: free RAM is short right now (other processes). That is
+            # temporary, so lay the rest out as if the whole machine were free rather than serialising it.
+            relaxed = True
+            continue
         if not nxt:  # nothing can ever be placed (e.g. never fits in RAM): queue the rest at the end
             for s in pending:
                 proj[s["key"]] = (t, t + dur(s))
@@ -228,6 +234,35 @@ class Runner:
     def set_priority(self, run_id: str, prio: int) -> None:
         self.store.update_run(run_id, priority=int(prio))
 
+    # ---- re-planning waiting steps (queue order, dependencies, concurrency)
+    def move_step(self, run_id: str, key: str, before: str | None = None, rewire: bool = True) -> dict:
+        order, changes = replan.plan_move(self.store.steps(run_id), key, before, rewire)
+        self.store.apply_layout(run_id, order, changes)
+        return {"order": order, "needs_changed": changes}
+
+    def set_needs(self, run_id: str, key: str, needs: list[str]) -> dict:
+        changes = replan.plan_needs(self.store.steps(run_id), key, needs)
+        self.store.apply_layout(run_id, None, changes)
+        return {"needs_changed": changes}
+
+    def make_parallel(self, run_id: str, keys: list[str]) -> dict:
+        steps = self.store.steps(run_id)
+        changes = replan.plan_parallel(steps, keys)
+        self.store.apply_layout(run_id, None, changes)
+        out: dict = {"needs_changed": changes}
+        # A run-wide cap below the group size would still serialise them, defeating the request: raise it.
+        cap = (self.store.run(run_id) or {}).get("max_parallel")
+        want = sum(1 for s in steps if s["state"] == "running") + len(set(keys))
+        if cap and cap < want:
+            self.store.update_run(run_id, max_parallel=want)
+            out["max_parallel_raised"] = {"from": cap, "to": want}
+        return out
+
+    def set_max_parallel(self, run_id: str, n: int | None) -> None:
+        if n is not None and int(n) < 1:
+            n = None  # 0 / none = no per-run limit (the machine-wide RAM/CPU budget still applies)
+        self.store.update_run(run_id, max_parallel=None if n is None else int(n))
+
     def retry(self, run_id: str, key: str | None = None) -> int:
         n = 0
         for s in self.store.steps(run_id):
@@ -236,8 +271,24 @@ class Runner:
                                        held_reason=None)
                 n += 1
         if n:
-            self.store.update_run(run_id, state="queued", finished_at=None)
+            self.store.update_run(run_id, state="queued", finished_at=None, hidden=0)
         return n
+
+    def forget(self, run_ids: list[str]) -> list[str]:
+        """Hide finished runs from the run lists. Their steps stay in the database, so past runtimes and peak RAM
+        still feed estimates, and `status <id>`, `logs` and `retry` still work. Refuses queued/running runs."""
+        active = [i for i in run_ids if (self.store.run(i) or {}).get("state") in ("queued", "running")]
+        if active:
+            raise ValueError(f"cancel these first, they are still active: {', '.join(active)}")
+        self.store.set_hidden(run_ids, True)
+        return run_ids
+
+    def clear(self, states: list[str]) -> list[str]:
+        """Forget every listed run whose state is in `states` (finished states only)."""
+        states = [s for s in states if s in ("done", "failed", "cancelled")]
+        ids = [r["id"] for r in self.store.runs(100000) if r["state"] in states]
+        self.store.set_hidden(ids, True)
+        return ids
 
     def _kill_step(self, s: dict) -> None:
         job = win32.Job.open(s["job_name"]) if s.get("job_name") else None
@@ -529,10 +580,10 @@ class Runner:
         self.alert_suspended.clear()
 
     # --------------------------------------------------------------- views
-    def runs_view(self, limit: int = 30) -> list[dict]:
+    def runs_view(self, limit: int = 30, include_hidden: bool = False) -> list[dict]:
         out = []
         now = time.time()
-        for r in self.store.runs(limit):
+        for r in self.store.runs(limit, include_hidden):
             steps = self.store.steps(r["id"])
             counts: dict[str, int] = {}
             for s in steps:

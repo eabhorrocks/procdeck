@@ -31,7 +31,8 @@
 <section class="tab on" id="tab-runs">
   <div class="strip" id="kpis"></div>
   <div class="runs-layout">
-    <div class="card"><div class="hd"><h2>Runs</h2><span class="muted" style="font-size:12px" id="runsCount"></span></div>
+    <div class="card"><div class="hd"><h2>Runs</h2><span class="muted" style="font-size:12px" id="runsCount"></span>
+      <button class="sm" id="clearRuns" style="margin-left:auto;display:none" title="hide finished runs from this list (logs and timing history are kept)">Clear finished</button></div>
       <div class="runlist" id="runList"></div></div>
     <div id="runDetail"></div>
   </div>
@@ -129,6 +130,17 @@
     <div class="result" id="dResult" style="display:none"></div>
   </div>
 </aside>
+<dialog id="needsDlg">
+  <h3>Run <span id="needsTitle"></span> after…</h3>
+  <div class="note" style="margin:0 0 8px">Tick the steps that must finish first. Leave everything unticked to start as soon as resources allow.</div>
+  <div class="needslist" id="needsList"></div>
+  <div class="btnrow" style="margin-top:12px">
+    <button class="primary" id="needsSave">Save</button>
+    <button id="needsAll" title="tick every step this one can wait for">Select all</button>
+    <button id="needsNone" title="untick everything">Clear all</button>
+    <button id="needsCancel" style="margin-left:auto">Cancel</button>
+  </div>
+</dialog>
 <div class="toast" id="toast"></div>
 <script src="app.js"></script>
 </body>

@@ -19,21 +19,37 @@ default.
 
 ## Install
 
+Windows only. Needs Miniconda or Anaconda.
+
+```bash
+git clone <repo-url> procdeck
+```
+
+```bash
+cd procdeck
+```
+
 ```bash
 conda env create -f environment.yml        # creates env "procdeck" and installs this repo in editable mode
 ```
 
+From the repo folder (PowerShell / cmd: `bin\procdeck.cmd` instead of `bin/procdeck`):
+
 ```bash
-D:/Code/procdeck/bin/procdeck start        # Git Bash  (PowerShell: D:\Code\procdeck\bin\procdeck.cmd start)
+bin/procdeck start
 ```
 
 ```bash
-D:/Code/procdeck/bin/procdeck install-skill   # copy the Claude skill to ~/.claude/skills/procdeck
+bin/procdeck install-skill   # copy the Claude skill to ~/.claude/skills/procdeck, with this repo's paths filled in
 ```
 
 ```bash
-D:/Code/procdeck/bin/procdeck autostart on    # optional: start the daemon at login
+bin/procdeck autostart on    # optional: start the daemon at login
 ```
+
+The `bin` shims find the `procdeck` env in the usual conda locations; set `PROCDECK_PYTHON` to the env's
+`python.exe` if yours is elsewhere. Add `bin` to your `PATH` to type plain `procdeck` (the rest of this README does),
+or run `procdeck` directly inside `conda activate procdeck`.
 
 ## Use
 
@@ -43,6 +59,10 @@ procdeck submit jobs/m01.yaml --by claude
 procdeck status [run]                      # runs, or one run's steps (with why a step is held)
 procdeck logs <run> <step> -f
 procdeck retry|cancel <run> [step]   ·   procdeck pause|resume <run>   ·   procdeck prio <run> 5
+procdeck move <run> <step> --before <other> | --first | --last   # reorder waiting steps (dashboard: drag the row)
+procdeck parallel <run> <step>... | --max N   # run waiting steps together / raise the run's max_parallel
+procdeck after <run> <step> [needs...]     # set what a waiting step waits for
+procdeck forget <run>... | clear [--state cancelled] [-n]   # hide finished runs; logs + timing history kept
 procdeck top                               # live CPU/RAM per job
 procdeck steer <pid> --weight 2 | --cap 30 | --cores 6-11 | --priority below_normal | --profile background
 procdeck kill|suspend|resume-proc <pid>    # whole tree
@@ -85,14 +105,18 @@ dashboard. The daemon reloads within 5 s.
   keeps its data in `~\.procdeck`, and `procdeck start` detects the redirection and launches the daemon through
   WMI, outside the app. Otherwise your jobs' MATLAB preferences, caches etc. would land in the app's private copy
   of `AppData`. Run `procdeck autostart` from a normal PowerShell window for the same reason.
-- **Shells:** in PowerShell or cmd run `D:\Code\procdeck\bin\procdeck.cmd`; in Git Bash run
-  `/d/Code/procdeck/bin/procdeck`.
+- **Shells:** in PowerShell or cmd run `bin\procdeck.cmd`; in Git Bash run `bin/procdeck` (or put `bin` on
+  your `PATH`).
 
 ## Tests
 
 ```bash
-"$LOCALAPPDATA/miniconda3/envs/procdeck/python.exe" -m pytest -q
+conda run -n procdeck python -m pytest -q
 ```
 
 [tools/](tools/) has load generators for manual end-to-end checks: `eat_ram.py`, `burn_cpu.py`, `spawn_tree.py`,
 `sleep_job.py`.
+
+## License
+
+MIT; see `LICENSE`.

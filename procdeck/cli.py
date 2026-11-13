@@ -232,13 +232,35 @@ def cmd_serve(a) -> None:
             "start it with `procdeck start` instead, which launches it outside")
     settings = load_settings()
     port = a.port or settings["port"]
+    # Claim the port before the job loop starts: a second daemon started at the same moment must exit here,
+    # not run its own scheduler (and launch the same waiting steps) until uvicorn fails to bind.
+    sock = claim_port(port)
+    if sock is None:
+        logging.getLogger("procdeck").error("port %d is already taken (another procdeck daemon?); exiting (pid %d)",
+                                            port, os.getpid())
+        raise SystemExit(1)
     d = Daemon()
     d.start()
     server = uvicorn.Server(uvicorn.Config(create_app(d, get_token(), port, on_shutdown=lambda: setattr(
         server, "should_exit", True)), host="127.0.0.1", port=port, log_level="warning", log_config=None))
     logging.getLogger("procdeck").info("procdeck daemon on http://127.0.0.1:%d (pid %d)", port, os.getpid())
-    server.run()
+    server.run(sockets=[sock])
     d.stop_event.set()
+
+
+def claim_port(port: int, host: str = "127.0.0.1"):
+    """Bind and listen on host:port exclusively, or return None if something else holds it."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: nobody may bind it on top of us, even with SO_REUSEADDR
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        sock.bind((host, port))
+        sock.listen(128)
+    except OSError:
+        sock.close()
+        return None
+    return sock
 
 
 def cmd_start(a) -> None:
@@ -340,7 +362,7 @@ def cmd_status(a) -> None:
                          s["exit_code"] if s["exit_code"] is not None else "-", info[:70]])
         print(table(rows, ["step", "state", "try", "time", "peak RAM", "exit", "info"]))
         return
-    runs = api("GET", "/api/runs?limit=" + str(a.limit))
+    runs = api("GET", f"/api/runs?limit={a.limit}" + ("&all=true" if a.all else ""))
     if a.json:
         return out_json(runs)
     rows = []
@@ -348,7 +370,8 @@ def cmd_status(a) -> None:
         c = r["counts"]
         prog = f"{c.get('done', 0)}/{r['n_steps']} done" + "".join(
             f", {c[k]} {k}" for k in ("running", "failed", "skipped", "cancelled") if c.get(k))
-        rows.append([r["id"], r["name"], r["state"] + (" (paused)" if r["paused"] else ""), prog,
+        rows.append([r["id"], r["name"], r["state"] + (" (paused)" if r["paused"] else "")
+                     + (" (forgotten)" if r.get("hidden") else ""), prog,
                      hm(r["submitted_at"]), hm(r.get("eta")) if r["state"] in ("queued", "running") else hm(r["finished_at"])])
     print(table(rows, ["run id", "name", "state", "steps", "submitted", "eta/finished"]) if rows else "no runs yet")
 
@@ -377,9 +400,72 @@ def cmd_logs(a) -> None:
             pass
 
 
+def cmd_forget(a) -> None:
+    if not a.runs:
+        raise SystemExit("give run ids/names to forget (or use `procdeck clear` for every finished run)")
+    r = api("POST", "/api/runs/forget", {"runs": a.runs, "undo": a.undo})
+    verb = "listed again" if a.undo else "forgotten (hidden from lists; history kept)"
+    print(f"{len(r['runs'])} run(s) {verb}: {', '.join(r['runs'])}")
+
+
+def cmd_clear(a) -> None:
+    states = a.state or ["done", "failed", "cancelled"]
+    runs = [r for r in api("GET", "/api/runs?limit=100000") if r["state"] in states]
+    if not runs:
+        print(f"no {'/'.join(states)} runs to clear")
+        return
+    print(table([[r["id"], r["name"], r["state"], hm(r["finished_at"])] for r in runs],
+                ["run id", "name", "state", "finished"]))
+    if a.dry_run:
+        print(f"\n{len(runs)} run(s) would be forgotten (dry run)")
+        return
+    r = api("POST", "/api/runs/forget", {"states": states})
+    print(f"\n{len(r['runs'])} run(s) forgotten. Logs and timing history are kept; "
+          f"`procdeck status --all` still lists them and `procdeck forget --undo RUN` restores one.")
+
+
 def _run_action(a, action: str, **extra) -> None:
     r = api("POST", f"/api/runs/{urllib.parse.quote(a.run)}/action", {"action": action, **extra})
     print(json.dumps(r))
+
+
+def _replan(a, action: str, **body) -> None:
+    r = api("POST", f"/api/runs/{urllib.parse.quote(a.run)}/action", {"action": action, **body})
+    changed = r.get("needs_changed") or {}
+    for k, n in changed.items():
+        print(f"  {k}: waits for {', '.join(n) if n else 'nothing (starts as soon as resources allow)'}")
+    mp = r.get("max_parallel_raised")
+    if mp:
+        print(f"  run max_parallel raised {mp['from']} -> {mp['to']} so they can actually overlap")
+    if action == "move":
+        print("queue order: " + " > ".join(r["order"]))
+    elif not changed and not mp:
+        print("no change")
+
+
+def cmd_move(a) -> None:
+    if a.first:
+        ordered = api("GET", f"/api/runs/{urllib.parse.quote(a.run)}")["steps"]
+        before = next((s["key"] for s in ordered if s["state"] == "waiting" and s["key"] != a.step), None)
+        if before is None:
+            raise SystemExit("no other waiting step to move in front of")
+    else:
+        before = a.before  # --last leaves this None
+    _replan(a, "move", key=a.step, before=before, rewire=not a.keep_deps)
+
+
+def cmd_parallel(a) -> None:
+    if a.max is not None:
+        n = None if a.max.lower() in ("0", "none", "off") else int(a.max)
+        _run_action(a, "max_parallel", value=n)
+    if a.steps:
+        _replan(a, "parallel", keys=a.steps)
+    elif a.max is None:
+        raise SystemExit("name the steps to run in parallel, and/or give --max N")
+
+
+def cmd_after(a) -> None:
+    _replan(a, "needs", key=a.step, needs=a.needs)
 
 
 def cmd_top(a) -> None:
@@ -439,11 +525,23 @@ def cmd_install_skill(a) -> None:
     src = REPO_DIR / "skill"
     dst = Path.home() / ".claude" / "skills" / "procdeck"
     dst.mkdir(parents=True, exist_ok=True)
+    bin_dir = REPO_DIR / "bin"
+    bash_bin = bin_dir.as_posix()
+    if len(bash_bin) > 1 and bash_bin[1] == ":":  # D:/x -> /d/x for Git Bash
+        bash_bin = "/" + bash_bin[0].lower() + bash_bin[2:]
+    subs = {"{{PROCDECK_BIN_BASH}}": bash_bin + "/procdeck",
+            "{{PROCDECK_BIN_CMD}}": str(bin_dir / "procdeck.cmd")}
     for f in src.rglob("*"):
         if f.is_file():
             t = dst / f.relative_to(src)
             t.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(f, t)
+            if f.suffix == ".md":
+                text = f.read_text(encoding="utf-8")
+                for k, v in subs.items():
+                    text = text.replace(k, v)
+                t.write_text(text, encoding="utf-8")
+            else:
+                shutil.copy2(f, t)
     print(f"installed Claude skill to {dst}")
 
 
@@ -494,8 +592,19 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("status", help="list runs, or show one run's steps")
     s.add_argument("run", nargs="?", help="run id, id prefix, or name (latest)")
     s.add_argument("--limit", type=int, default=15)
+    s.add_argument("--all", action="store_true", help="include forgotten runs")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_status)
+
+    s = sub.add_parser("forget", help="hide finished runs from the lists (logs and timing history are kept)")
+    s.add_argument("runs", nargs="*", help="run ids, id prefixes, or names (latest)")
+    s.add_argument("--undo", action="store_true", help="list these runs again")
+    s.set_defaults(fn=cmd_forget)
+    s = sub.add_parser("clear", help="forget every finished run (done, failed and cancelled; narrow with --state)")
+    s.add_argument("--state", action="append", choices=["done", "failed", "cancelled"],
+                   help="only runs in this state (repeatable)")
+    s.add_argument("--dry-run", "-n", action="store_true", help="list what would be forgotten")
+    s.set_defaults(fn=cmd_clear)
 
     s = sub.add_parser("logs", help="show a step's log")
     s.add_argument("run")
@@ -519,6 +628,27 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("run")
     s.add_argument("value", type=int)
     s.set_defaults(fn=lambda a: _run_action(a, "priority", value=a.value))
+
+    s = sub.add_parser("move", help="reorder a waiting step in a run's queue (dashboard: drag the row)")
+    s.add_argument("run")
+    s.add_argument("step")
+    g = s.add_mutually_exclusive_group(required=True)
+    g.add_argument("--before", metavar="STEP", help="put it just ahead of this waiting step")
+    g.add_argument("--first", action="store_true", help="put it at the front of the waiting steps")
+    g.add_argument("--last", action="store_true", help="put it at the end")
+    s.add_argument("--keep-deps", action="store_true",
+                   help="only change queue order; do not rewire `needs` when the move crosses a dependency")
+    s.set_defaults(fn=cmd_move)
+    s = sub.add_parser("parallel", help="let waiting steps run at the same time and/or raise the run's max_parallel")
+    s.add_argument("run")
+    s.add_argument("steps", nargs="*", help="waiting steps to make independent siblings (one step = stop waiting)")
+    s.add_argument("--max", metavar="N", help="max steps of this run at once ('none' = no per-run limit)")
+    s.set_defaults(fn=cmd_parallel)
+    s = sub.add_parser("after", help="set what a waiting step waits for (no names = start as soon as possible)")
+    s.add_argument("run")
+    s.add_argument("step")
+    s.add_argument("needs", nargs="*", help="steps that must finish first")
+    s.set_defaults(fn=cmd_after)
 
     s = sub.add_parser("top", help="what is using CPU/RAM right now")
     s.add_argument("-n", type=int, default=20)

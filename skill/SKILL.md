@@ -6,12 +6,12 @@ description: Run, queue and schedule long analyses (Python / MATLAB) on this Win
 # procdeck: running analyses on this machine
 
 procdeck is a local daemon (dashboard at http://127.0.0.1:8857) that runs pipelines of analysis steps within the
-machine's budget: 6 cores / 12 logical CPUs and 16 GB of RAM. Usually RAM runs out first. It also monitors and steers
+machine's CPU and RAM budget (`procdeck top` shows both). Usually RAM runs out first. It also monitors and steers
 processes it did not start.
 
 **CLI** (the daemon starts automatically if it is not running):
-- Git Bash: `/d/Code/procdeck/bin/procdeck <command>`
-- PowerShell / cmd: `D:\Code\procdeck\bin\procdeck.cmd <command>`
+- Git Bash: `{{PROCDECK_BIN_BASH}} <command>`
+- PowerShell / cmd: `{{PROCDECK_BIN_CMD}} <command>`
 
 Every read command has `--json`.
 
@@ -40,7 +40,7 @@ priority: 0                        # higher-priority runs get free slots first
 mode: parallel                     # or 'sequential': each step needs the previous one (unless it lists needs)
 max_parallel: 2                    # cap on concurrently running steps of this run
 defaults:                          # apply to every step unless the step overrides them
-  cwd: D:/Code/SpikePostProcessing # default: repo root (parent of jobs/), else the spec's folder
+  cwd: D:/Code/MyAnalysis          # default: repo root (parent of jobs/), else the spec's folder
   env: spikepost                   # conda env name -> that env's python + DLL paths; omit for MATLAB
   profile: background              # resource profile (see below)
   mem: 6G                          # expected PEAK RAM per step instance; drives admission control
@@ -97,13 +97,14 @@ steps:
 
 A ready step starts only when all of these hold:
 - the run's and the step's `max_parallel` allow it;
-- the threads of running steps plus this step fit the budget (12). One step may always run.
-- available RAM, minus 1.5 GB headroom, minus the remaining expected growth of running steps, is at least the step's
-  `mem`.
+- the threads of running steps plus this step fit the thread budget (`cpu_threads_budget`). One step may always run.
+- available RAM, minus the headroom (`admission.headroom_gb` in settings.yaml; 0.8 GB on this machine), minus the
+  remaining expected growth of running steps (`mem` minus the step's current RAM), is at least the step's `mem`.
 
-When there is no `mem`, the estimate is the step's past peak × 1.1 from history, else 1 GB. **Always set `mem` for
-heavy steps.** Estimate it from history, the data size, or a quick test run. Too low risks swapping; too high
-serialises everything.
+When there is no `mem`, the estimate is the step's past peak × 1.1 from history, else `default_mem_gb` (2 GB). **Always
+set `mem` for heavy steps, and set it per step rather than one blanket value in `defaults:`.** A blanket value reserves
+that much for every light step too (a 1G default held 1 GB for 0.2 GB report steps). Estimate it from history
+(`procdeck history`), the data size, or a quick test run. Too low risks swapping; too high serialises everything.
 
 At 93% RAM, admission pauses automatically until memory recovers. The held reason appears in `procdeck status` and in
 the dashboard.
@@ -116,10 +117,20 @@ the dashboard.
 | `procdeck steer PID --weight 2` / `--cap 30` / `--cores 6-11` / `--priority below_normal` / `--profile background` / `--mem-cap 8` | steer a running process tree, including one procdeck did not start |
 | `procdeck kill PID` / `suspend PID` / `resume-proc PID` | act on a whole process tree |
 | `procdeck pause RUN` / `resume RUN` / `prio RUN N` | control a run |
+| `procdeck move RUN STEP --before OTHER` / `--first` / `--last` | reorder a *waiting* step in the queue; if the move crosses one of its dependencies the chain is rewired (A→B→C, `move C --first` gives C→A→B). `--keep-deps` changes queue order only |
+| `procdeck parallel RUN STEP STEP...` | let waiting steps run at the same time (they share what the group was waiting for; anything after them waits for all). One step = stop waiting for anything |
+| `procdeck parallel RUN --max N` | change the run's `max_parallel` (`none` = no per-run limit); RAM and the CPU thread budget still apply |
+| `procdeck after RUN STEP [NEEDS...]` | set exactly what a waiting step waits for (no names = start as soon as resources allow) |
 | `procdeck admission pause` / `resume` | stop or allow starting any queued steps |
+| `procdeck forget RUN...` / `forget --undo RUN` | hide finished runs from the lists (e.g. cancelled runs replaced by a resubmit); logs and timing history are kept |
+| `procdeck clear [--state cancelled] [-n]` | forget every finished run (done, failed, cancelled), or only those in a state; `-n` previews; `status --all` still lists them |
 | `procdeck open` | open the dashboard |
 
 Guidelines:
+- Reordering and rewiring only touch steps that have not started; the dashboard shows the *original* spec text, so
+  trust `procdeck status` / the step table for the current "waits for".
+- More steps in parallel is limited by `max_parallel`, the thread budget (`cpu_threads_budget`, 12 by default: two
+  `background` steps at 6 threads each) and free RAM; the held reason says which one.
 - Steering or killing processes the user did not ask about needs their OK.
 - Never set `--mem-cap` without saying that the job will crash with MemoryError when it reaches the cap.
 - `procdeck status` and `procdeck top` are safe to run at any time.

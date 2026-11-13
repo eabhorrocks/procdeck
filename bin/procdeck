@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
-# Git Bash / MSYS shim for the procdeck CLI.
-PY="$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$LOCALAPPDATA")/miniconda3/envs/procdeck/python.exe"
+# Git Bash / MSYS shim for the procdeck CLI. Uses $PROCDECK_PYTHON if set, else the "procdeck" conda env in the
+# usual Miniconda / Anaconda install locations.
+to_unix() { cygpath -u "$1" 2>/dev/null || echo "$1"; }
+PY="${PROCDECK_PYTHON:-}"
+if [ -z "$PY" ]; then
+  for root in "$LOCALAPPDATA/miniconda3" "$USERPROFILE/miniconda3" "$USERPROFILE/anaconda3" \
+              "$LOCALAPPDATA/anaconda3" "$PROGRAMDATA/miniconda3" "$PROGRAMDATA/anaconda3"; do
+    cand="$(to_unix "$root")/envs/procdeck/python.exe"
+    if [ -x "$cand" ]; then PY="$cand"; break; fi
+  done
+fi
+if [ -z "$PY" ]; then
+  echo "procdeck: conda env 'procdeck' not found; run 'conda env create -f environment.yml' or set PROCDECK_PYTHON" >&2
+  exit 1
+fi
 exec "$PY" -m procdeck "$@"

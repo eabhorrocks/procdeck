@@ -45,6 +45,9 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(runs)")}
+        if "hidden" not in cols:  # added after the first release; 1 = forgotten (kept for history, not listed)
+            self.db.execute("ALTER TABLE runs ADD COLUMN hidden INTEGER DEFAULT 0")
 
     # ---------------------------------------------------------------- generic
     def q(self, sql: str, args=()) -> list[dict]:
@@ -90,9 +93,15 @@ class Store:
                 self.db.execute("ROLLBACK")
                 raise
 
-    def runs(self, limit: int = 50) -> list[dict]:
+    def runs(self, limit: int = 50, include_hidden: bool = False) -> list[dict]:
+        where = "" if include_hidden else "WHERE COALESCE(hidden,0)=0 "
         return self.q("SELECT id,name,description,spec_path,submitted_at,submitted_by,priority,max_parallel,state,"
-                      "paused,finished_at FROM runs ORDER BY submitted_at DESC LIMIT ?", (limit,))
+                      f"paused,finished_at,COALESCE(hidden,0) AS hidden FROM runs {where}"
+                      "ORDER BY submitted_at DESC LIMIT ?", (limit,))
+
+    def set_hidden(self, run_ids: list[str], hidden: bool) -> None:
+        with self.lock:
+            self.db.executemany("UPDATE runs SET hidden=? WHERE id=?", [(int(hidden), i) for i in run_ids])
 
     def active_runs(self) -> list[dict]:
         return self.q("SELECT * FROM runs WHERE state IN ('queued','running') ORDER BY priority DESC, submitted_at")
@@ -109,7 +118,7 @@ class Store:
         r = self.q("SELECT * FROM runs WHERE id LIKE ? ORDER BY submitted_at DESC LIMIT 1", (ref + "%",))
         if r:
             return r[0]
-        r = self.q("SELECT * FROM runs WHERE name=? ORDER BY submitted_at DESC LIMIT 1", (ref,))
+        r = self.q("SELECT * FROM runs WHERE name=? ORDER BY COALESCE(hidden,0), submitted_at DESC LIMIT 1", (ref,))
         return r[0] if r else None
 
     def update_run(self, run_id: str, **kw) -> None:
@@ -118,6 +127,21 @@ class Store:
 
     def steps(self, run_id: str) -> list[dict]:
         return self.q("SELECT * FROM steps WHERE run_id=? ORDER BY seq", (run_id,))
+
+    def apply_layout(self, run_id: str, order: list[str] | None, needs: dict[str, list[str]]) -> None:
+        """Atomically renumber step `seq` (queue order) and/or rewrite some steps' `needs`."""
+        with self.lock:
+            self.db.execute("BEGIN")
+            try:
+                if order is not None:
+                    self.db.executemany("UPDATE steps SET seq=? WHERE run_id=? AND key=?",
+                                        [(i, run_id, k) for i, k in enumerate(order)])
+                self.db.executemany("UPDATE steps SET needs=?, held_reason=NULL WHERE run_id=? AND key=?",
+                                    [(json.dumps(v), run_id, k) for k, v in needs.items()])
+                self.db.execute("COMMIT")
+            except Exception:
+                self.db.execute("ROLLBACK")
+                raise
 
     def running_steps(self) -> list[dict]:
         return self.q("SELECT s.*, r.name AS run_name FROM steps s JOIN runs r ON r.id=s.run_id "

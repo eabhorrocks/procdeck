@@ -49,6 +49,9 @@ def valid_parent(rows: dict[int, Row], r: Row) -> Row | None:
 
 
 def is_orphan(rows: dict[int, Row], r: Row, watch: list[str]) -> bool:
+    # The daemon and step launchers are started detached, so their parent exiting is normal, not a leftover.
+    if r.kind in ("daemon", "launcher"):
+        return False
     return r.own and r.name.lower() in watch and r.ppid != 0 and valid_parent(rows, r) is None
 
 
@@ -200,7 +203,7 @@ class Sampler:
                 r.flags.append("hung")
             if r.suspended and (r.name.lower() in compute or r.pid in managed):
                 r.flags.append("suspended")
-            if is_orphan(rows, r, fs["orphan_watch"]) and r.pid not in managed and r.kind != "launcher":
+            if is_orphan(rows, r, fs["orphan_watch"]) and r.pid not in managed:
                 r.flags.append("orphan")
 
         gmap = assign_groups(rows, managed, compute, self.self_pid)
@@ -296,23 +299,31 @@ class Sampler:
             "nproc": nproc, "nthreads": nthreads,
         }
 
-    def tree_pids(self, root_pid: int) -> list[int]:
-        """root + all descendants, from the last sample (falls back to psutil)."""
+    def tree_pids(self, root_pid: int, stop: set[int] | frozenset = frozenset()) -> list[int]:
+        """root + all descendants, from the last sample (falls back to psutil).
+
+        Descendants in `stop` are left out together with their own subtrees (the root never is)."""
         rows = self.rows
-        if root_pid not in rows:
+        kids: dict[int, list[int]] = {}
+        if root_pid in rows:
+            for r in rows.values():
+                par = valid_parent(rows, r)
+                if par is not None:
+                    kids.setdefault(par.pid, []).append(r.pid)
+        else:
             try:
-                p = psutil.Process(root_pid)
-                return [root_pid] + [c.pid for c in p.children(recursive=True)]
+                for c in psutil.Process(root_pid).children(recursive=True):
+                    try:
+                        kids.setdefault(c.ppid(), []).append(c.pid)
+                    except psutil.Error:
+                        pass
             except psutil.Error:
                 return []
-        kids: dict[int, list[int]] = {}
-        for r in rows.values():
-            par = valid_parent(rows, r)
-            if par is not None:
-                kids.setdefault(par.pid, []).append(r.pid)
         out, stack = [], [root_pid]
         while stack:
             pid = stack.pop()
+            if pid != root_pid and pid in stop:
+                continue
             out.append(pid)
             stack.extend(kids.get(pid, []))
         return out
